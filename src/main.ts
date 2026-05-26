@@ -1,10 +1,8 @@
-import { Platform, Plugin, TFile } from "obsidian";
+import { Plugin } from "obsidian";
 import { MobileExplorerView, VIEW_TYPE } from "./view";
 
 export default class MobileExplorerPlugin extends Plugin {
 	async onload() {
-		if (!Platform.isMobile) return;
-
 		this.registerView(VIEW_TYPE, (leaf) => new MobileExplorerView(leaf));
 
 		this.addCommand({
