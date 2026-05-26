@@ -207,38 +207,121 @@ export class MobileExplorerView extends ItemView {
 		let startX = 0;
 		let startY = 0;
 		let tracking = false;
+		let axis: "none" | "horizontal" | "vertical" = "none";
+		let prevList: HTMLElement | null = null;
+		let width = 1;
 
 		this.wrapperEl.addEventListener("touchstart", (e) => {
-			const touch = e.touches[0];
-			if (touch && touch.clientX < 60 && this.currentFolder.parent) {
-				startX = touch.clientX;
-				startY = touch.clientY;
-				tracking = true;
+			if (!this.currentFolder.parent || this.isAnimating) {
+				tracking = false;
+				return;
 			}
-		});
-
-		this.wrapperEl.addEventListener("touchmove", (e) => {
-			if (!tracking) return;
 			const touch = e.touches[0];
 			if (!touch) return;
-			const dy = Math.abs(touch.clientY - startY);
-			const dx = touch.clientX - startX;
-			if (dy > 30 && dy > dx) {
-				tracking = false;
-			}
+			startX = touch.clientX;
+			startY = touch.clientY;
+			axis = "none";
+			tracking = true;
 		});
+
+		this.wrapperEl.addEventListener(
+			"touchmove",
+			(e) => {
+				if (!tracking) return;
+				const touch = e.touches[0];
+				if (!touch) return;
+				const dx = touch.clientX - startX;
+				const dy = touch.clientY - startY;
+
+				if (axis === "none" && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+					axis = Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
+				}
+				if (axis !== "horizontal") return;
+
+				const parent = this.currentFolder.parent;
+				if (!parent) return;
+
+				// Engage only on a rightward drag; a leftward horizontal swipe is
+				// left to Obsidian (e.g. closing the sidebar).
+				if (!prevList) {
+					if (dx <= 0) return;
+					width = this.wrapperEl.clientWidth || 1;
+					prevList = this.wrapperEl.createDiv("mobile-explorer-list");
+					this.wrapperEl.insertBefore(prevList, this.listEl);
+					this.renderFolderInto(prevList, parent, this.currentFolder.path);
+					prevList.style.transition = "none";
+					this.listEl.style.transition = "none";
+				}
+
+				// Claim the gesture so it drags the view instead of scrolling
+				// the list or triggering Obsidian's panel gestures.
+				e.preventDefault();
+				e.stopPropagation();
+
+				const offset = Math.max(0, Math.min(dx, width));
+				const progress = offset / width;
+				this.listEl.style.transform = `translateX(${offset}px)`;
+				prevList.style.transform = `translateX(${-30 * (1 - progress)}%)`;
+				prevList.style.opacity = String(0.3 + 0.7 * progress);
+			},
+			{ passive: false }
+		);
 
 		this.wrapperEl.addEventListener("touchend", (e) => {
-			if (!tracking) return;
 			tracking = false;
+			if (!prevList) return;
+
+			const incoming = prevList;
+			prevList = null;
+			const outgoing = this.listEl;
+			const parent = this.currentFolder.parent;
+
 			const touch = e.changedTouches[0];
-			if (!touch) return;
-			const dx = touch.clientX - startX;
-			const dy = Math.abs(touch.clientY - startY);
-			if (dx > 50 && dx > dy * 1.5) {
-				this.navigateToParent();
+			const dx = touch ? touch.clientX - startX : 0;
+			const complete = !!parent && dx > width * 0.4;
+
+			this.isAnimating = true;
+			const settle =
+				"transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.3s ease";
+			outgoing.style.transition = settle;
+			incoming.style.transition = settle;
+
+			if (complete && parent) {
+				outgoing.style.transform = "translateX(100%)";
+				outgoing.style.opacity = "0";
+				incoming.style.transform = "translateX(0)";
+				incoming.style.opacity = "1";
+				this.onSettle(incoming, () => {
+					outgoing.remove();
+					incoming.style.transition = "";
+					this.listEl = incoming;
+					this.currentFolder = parent;
+					this.renderHeader();
+					this.isAnimating = false;
+				});
+			} else {
+				outgoing.style.transform = "translateX(0)";
+				outgoing.style.opacity = "1";
+				incoming.style.transform = "translateX(-30%)";
+				incoming.style.opacity = "0";
+				this.onSettle(outgoing, () => {
+					incoming.remove();
+					outgoing.style.transition = "";
+					this.isAnimating = false;
+				});
 			}
 		});
+	}
+
+	private onSettle(el: HTMLElement, cb: () => void) {
+		let done = false;
+		const fire = () => {
+			if (done) return;
+			done = true;
+			cb();
+		};
+		el.addEventListener("transitionend", fire, { once: true });
+		setTimeout(fire, 350);
 	}
 
 	// --- Rendering ---
@@ -312,11 +395,19 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private renderList(restorePath?: string) {
-		this.listEl.empty();
-		const children = this.getSortedChildren(this.currentFolder);
+		this.renderFolderInto(this.listEl, this.currentFolder, restorePath);
+	}
+
+	private renderFolderInto(
+		target: HTMLElement,
+		folder: TFolder,
+		restorePath?: string
+	) {
+		target.empty();
+		const children = this.getSortedChildren(folder);
 
 		if (children.length === 0) {
-			const empty = this.listEl.createDiv("mobile-explorer-empty");
+			const empty = target.createDiv("mobile-explorer-empty");
 			empty.textContent = "No items";
 			return;
 		}
@@ -327,7 +418,7 @@ export class MobileExplorerView extends ItemView {
 		let restoreEl: HTMLElement | null = null;
 
 		if (folders.length > 0) {
-			const section = this.listEl.createDiv("mobile-explorer-section");
+			const section = target.createDiv("mobile-explorer-section");
 			if (files.length > 0) {
 				section.createDiv({
 					cls: "mobile-explorer-section-label",
@@ -342,7 +433,7 @@ export class MobileExplorerView extends ItemView {
 		}
 
 		if (files.length > 0) {
-			const section = this.listEl.createDiv("mobile-explorer-section");
+			const section = target.createDiv("mobile-explorer-section");
 			if (folders.length > 0) {
 				section.createDiv({
 					cls: "mobile-explorer-section-label",
