@@ -22,6 +22,8 @@ export class MobileExplorerView extends ItemView {
 	private listEl!: HTMLElement;
 	private isAnimating = false;
 	private longPressTriggered = false;
+	private swipeTriggered = false;
+	private activeSwipeItem: HTMLElement | null = null;
 	private refreshTimer: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf) {
@@ -364,7 +366,16 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private renderFolderItem(container: HTMLElement, folder: TFolder): HTMLElement {
-		const item = container.createDiv({
+		const wrapper = container.createDiv("mobile-explorer-swipe-container");
+
+		const deleteAction = wrapper.createDiv("mobile-explorer-delete-action");
+		deleteAction.textContent = "Delete";
+		deleteAction.addEventListener("click", async () => {
+			await this.app.fileManager.trashFile(folder);
+			new Notice(`Moved to trash: ${folder.name}`);
+		});
+
+		const item = wrapper.createDiv({
 			cls: "mobile-explorer-item is-folder",
 		});
 
@@ -381,19 +392,34 @@ export class MobileExplorerView extends ItemView {
 		setIcon(chevron, "chevron-right");
 
 		item.addEventListener("click", () => {
-			if (this.longPressTriggered) {
+			if (this.longPressTriggered || this.swipeTriggered) {
 				this.longPressTriggered = false;
+				this.swipeTriggered = false;
+				return;
+			}
+			if (this.activeSwipeItem) {
+				this.closeActiveSwipe();
 				return;
 			}
 			this.enterFolder(folder);
 		});
 
+		this.addSwipeToDelete(wrapper, item);
 		this.addLongPress(item, folder);
-		return item;
+		return wrapper;
 	}
 
 	private renderFileItem(container: HTMLElement, file: TFile): HTMLElement {
-		const item = container.createDiv({
+		const wrapper = container.createDiv("mobile-explorer-swipe-container");
+
+		const deleteAction = wrapper.createDiv("mobile-explorer-delete-action");
+		deleteAction.textContent = "Delete";
+		deleteAction.addEventListener("click", async () => {
+			await this.app.fileManager.trashFile(file);
+			new Notice(`Moved to trash: ${file.name}`);
+		});
+
+		const item = wrapper.createDiv({
 			cls: "mobile-explorer-item is-file",
 		});
 
@@ -413,15 +439,101 @@ export class MobileExplorerView extends ItemView {
 		});
 
 		item.addEventListener("click", () => {
-			if (this.longPressTriggered) {
+			if (this.longPressTriggered || this.swipeTriggered) {
 				this.longPressTriggered = false;
+				this.swipeTriggered = false;
+				return;
+			}
+			if (this.activeSwipeItem) {
+				this.closeActiveSwipe();
 				return;
 			}
 			this.openFile(file);
 		});
 
+		this.addSwipeToDelete(wrapper, item);
 		this.addLongPress(item, file);
-		return item;
+		return wrapper;
+	}
+
+	// --- Swipe to delete ---
+
+	private addSwipeToDelete(wrapper: HTMLElement, itemEl: HTMLElement) {
+		let startX = 0;
+		let startY = 0;
+		let currentX = 0;
+		let swiping = false;
+		let direction: "none" | "horizontal" | "vertical" = "none";
+
+		wrapper.addEventListener("touchstart", (e) => {
+			const touch = e.touches[0];
+			if (!touch) return;
+			startX = touch.clientX;
+			startY = touch.clientY;
+			currentX = 0;
+			direction = "none";
+			swiping = true;
+			itemEl.style.transition = "none";
+		});
+
+		wrapper.addEventListener(
+			"touchmove",
+			(e) => {
+				if (!swiping) return;
+				const touch = e.touches[0];
+				if (!touch) return;
+
+				const dx = touch.clientX - startX;
+				const dy = touch.clientY - startY;
+
+				if (direction === "none") {
+					if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+						direction =
+							Math.abs(dx) > Math.abs(dy)
+								? "horizontal"
+								: "vertical";
+						if (direction === "horizontal") {
+							this.swipeTriggered = true;
+						}
+					}
+				}
+
+				if (direction !== "horizontal") return;
+
+				e.preventDefault();
+				e.stopPropagation();
+
+				currentX = Math.min(0, dx);
+				currentX = Math.max(currentX, -80);
+				itemEl.style.transform = `translateX(${currentX}px)`;
+			},
+			{ passive: false }
+		);
+
+		wrapper.addEventListener("touchend", () => {
+			if (!swiping) return;
+			swiping = false;
+
+			if (direction !== "horizontal") return;
+
+			itemEl.style.transition = "transform 0.2s ease";
+
+			if (currentX < -40) {
+				itemEl.style.transform = "translateX(-80px)";
+				this.closeActiveSwipe();
+				this.activeSwipeItem = itemEl;
+			} else {
+				itemEl.style.transform = "translateX(0)";
+			}
+		});
+	}
+
+	private closeActiveSwipe() {
+		if (this.activeSwipeItem) {
+			this.activeSwipeItem.style.transition = "transform 0.2s ease";
+			this.activeSwipeItem.style.transform = "translateX(0)";
+			this.activeSwipeItem = null;
+		}
 	}
 
 	// --- Long press / context menu ---

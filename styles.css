@@ -145,6 +145,33 @@
 	overflow: hidden;
 }
 
+/* ---- Swipe-to-delete ---- */
+
+.mobile-explorer-swipe-container {
+	position: relative;
+	overflow: hidden;
+}
+
+.mobile-explorer-swipe-container:not(:last-child) {
+	border-bottom: 0.5px solid var(--background-modifier-border);
+}
+
+.mobile-explorer-delete-action {
+	position: absolute;
+	right: 0;
+	top: 0;
+	bottom: 0;
+	width: 80px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: #ff3b30;
+	color: #fff;
+	font-size: 15px;
+	font-weight: 500;
+	-webkit-tap-highlight-color: transparent;
+}
+
 /* ---- Items ---- */
 
 .mobile-explorer-item {
@@ -154,10 +181,9 @@
 	min-height: 44px;
 	box-sizing: border-box;
 	-webkit-tap-highlight-color: transparent;
-}
-
-.mobile-explorer-item:not(:last-child) {
-	border-bottom: 0.5px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	position: relative;
+	z-index: 1;
 }
 
 .mobile-explorer-item:active {
