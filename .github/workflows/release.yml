@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+# Pushes whose head commit message contains "[skip ci]" are skipped by
+# GitHub automatically, so no release is produced for those merges.
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bump patch version
+        id: bump
+        run: |
+          node -e '
+          const fs = require("fs");
+          const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+          const parts = manifest.version.split(".").map(Number);
+          parts[2] += 1;
+          const next = parts.join(".");
+          manifest.version = next;
+          fs.writeFileSync("manifest.json", JSON.stringify(manifest, null, "\t") + "\n");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          pkg.version = next;
+          fs.writeFileSync("package.json", JSON.stringify(pkg, null, "\t") + "\n");
+          const versions = JSON.parse(fs.readFileSync("versions.json", "utf8"));
+          versions[next] = manifest.minAppVersion;
+          fs.writeFileSync("versions.json", JSON.stringify(versions, null, "\t") + "\n");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "version=" + next + "\n");
+          '
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit, tag, and push
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json package.json versions.json main.js
+          git commit -m "Release $VERSION [skip ci]"
+          git tag -a "$VERSION" -m "$VERSION"
+          git push origin HEAD:main
+          git push origin "$VERSION"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            main.js manifest.json styles.css \
+            --title "$VERSION" \
+            --notes "Automated release for $VERSION"
