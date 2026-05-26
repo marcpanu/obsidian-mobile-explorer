@@ -273,6 +273,42 @@ export class MobileExplorerView extends ItemView {
 		const newNoteBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newNoteBtn, "square-pen");
 		newNoteBtn.addEventListener("click", () => this.createNewNote());
+
+		const children = this.currentFolder.children;
+		const folders = children.filter((c) => c instanceof TFolder);
+		const files = children.filter((c) => c instanceof TFile);
+		const parts: string[] = [];
+		if (folders.length > 0)
+			parts.push(`${folders.length} folder${folders.length !== 1 ? "s" : ""}`);
+		if (files.length > 0)
+			parts.push(`${files.length} note${files.length !== 1 ? "s" : ""}`);
+		if (parts.length > 0) {
+			const subtitle = this.headerEl.createDiv("mobile-explorer-subtitle");
+			subtitle.textContent = parts.join(", ");
+		}
+	}
+
+	private formatDate(ts: number): string {
+		const d = new Date(ts);
+		const now = new Date();
+		const diffMs = now.getTime() - d.getTime();
+		const diffDays = Math.floor(diffMs / 86400000);
+
+		if (diffDays === 0) {
+			return d.toLocaleTimeString(undefined, {
+				hour: "numeric",
+				minute: "2-digit",
+			});
+		}
+		if (diffDays === 1) return "Yesterday";
+		if (diffDays < 7) {
+			return d.toLocaleDateString(undefined, { weekday: "long" });
+		}
+		return d.toLocaleDateString(undefined, {
+			month: "short",
+			day: "numeric",
+			year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined,
+		});
 	}
 
 	private renderList(restorePath?: string) {
@@ -285,49 +321,38 @@ export class MobileExplorerView extends ItemView {
 			return;
 		}
 
+		const folders = children.filter((c) => c instanceof TFolder) as TFolder[];
+		const files = children.filter((c) => c instanceof TFile) as TFile[];
+
 		let restoreEl: HTMLElement | null = null;
 
-		for (const child of children) {
-			const isFolder = child instanceof TFolder;
-			const item = this.listEl.createDiv({
-				cls: `mobile-explorer-item ${isFolder ? "is-folder" : "is-file"}`,
-			});
-
-			const icon = item.createDiv("mobile-explorer-item-icon");
-			setIcon(icon, isFolder ? "folder" : "file-text");
-
-			const name = item.createDiv("mobile-explorer-item-name");
-			name.textContent = isFolder
-				? child.name
-				: (child as TFile).basename;
-
-			if (isFolder) {
-				const count = item.createDiv("mobile-explorer-item-count");
-				count.textContent = String((child as TFolder).children.length);
-
-				const chevron = item.createDiv("mobile-explorer-item-chevron");
-				setIcon(chevron, "chevron-right");
-			} else {
-				const ext = (child as TFile).extension;
-				if (ext && ext !== "md") {
-					const badge = item.createDiv("mobile-explorer-item-badge");
-					badge.textContent = ext.toUpperCase();
-				}
+		if (folders.length > 0) {
+			const section = this.listEl.createDiv("mobile-explorer-section");
+			if (files.length > 0) {
+				section.createDiv({
+					cls: "mobile-explorer-section-label",
+					text: "Folders",
+				});
 			}
+			const card = section.createDiv("mobile-explorer-section-card");
+			for (const folder of folders) {
+				const el = this.renderFolderItem(card, folder);
+				if (restorePath && folder.path === restorePath) restoreEl = el;
+			}
+		}
 
-			item.addEventListener("click", () => {
-				if (this.longPressTriggered) {
-					this.longPressTriggered = false;
-					return;
-				}
-				if (isFolder) this.enterFolder(child as TFolder);
-				else this.openFile(child as TFile);
-			});
-
-			this.addLongPress(item, child);
-
-			if (restorePath && child.path === restorePath) {
-				restoreEl = item;
+		if (files.length > 0) {
+			const section = this.listEl.createDiv("mobile-explorer-section");
+			if (folders.length > 0) {
+				section.createDiv({
+					cls: "mobile-explorer-section-label",
+					text: "Notes",
+				});
+			}
+			const card = section.createDiv("mobile-explorer-section-card");
+			for (const file of files) {
+				const el = this.renderFileItem(card, file);
+				if (restorePath && file.path === restorePath) restoreEl = el;
 			}
 		}
 
@@ -336,6 +361,67 @@ export class MobileExplorerView extends ItemView {
 			restoreEl.scrollIntoView({ block: "center" });
 			setTimeout(() => restoreEl?.removeClass("is-highlighted"), 1000);
 		}
+	}
+
+	private renderFolderItem(container: HTMLElement, folder: TFolder): HTMLElement {
+		const item = container.createDiv({
+			cls: "mobile-explorer-item is-folder",
+		});
+
+		const icon = item.createDiv("mobile-explorer-item-icon");
+		setIcon(icon, "folder");
+
+		const content = item.createDiv("mobile-explorer-item-content");
+		content.createDiv({ cls: "mobile-explorer-item-name", text: folder.name });
+
+		const count = item.createDiv("mobile-explorer-item-count");
+		count.textContent = String(folder.children.length);
+
+		const chevron = item.createDiv("mobile-explorer-item-chevron");
+		setIcon(chevron, "chevron-right");
+
+		item.addEventListener("click", () => {
+			if (this.longPressTriggered) {
+				this.longPressTriggered = false;
+				return;
+			}
+			this.enterFolder(folder);
+		});
+
+		this.addLongPress(item, folder);
+		return item;
+	}
+
+	private renderFileItem(container: HTMLElement, file: TFile): HTMLElement {
+		const item = container.createDiv({
+			cls: "mobile-explorer-item is-file",
+		});
+
+		const icon = item.createDiv("mobile-explorer-item-icon");
+		setIcon(icon, "file-text");
+
+		const content = item.createDiv("mobile-explorer-item-content");
+		content.createDiv({ cls: "mobile-explorer-item-name", text: file.basename });
+
+		const metaParts: string[] = [];
+		metaParts.push(this.formatDate(file.stat.mtime));
+		const ext = file.extension;
+		if (ext && ext !== "md") metaParts.push(ext.toUpperCase());
+		content.createDiv({
+			cls: "mobile-explorer-item-meta",
+			text: metaParts.join("  ·  "),
+		});
+
+		item.addEventListener("click", () => {
+			if (this.longPressTriggered) {
+				this.longPressTriggered = false;
+				return;
+			}
+			this.openFile(file);
+		});
+
+		this.addLongPress(item, file);
+		return item;
 	}
 
 	// --- Long press / context menu ---
