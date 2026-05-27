@@ -1,13 +1,9 @@
 import {
-	App,
 	ItemView,
 	Menu,
-	Modal,
-	Notice,
 	TAbstractFile,
 	TFile,
 	TFolder,
-	TextComponent,
 	WorkspaceLeaf,
 	setIcon,
 } from "obsidian";
@@ -560,35 +556,7 @@ export class MobileExplorerView extends ItemView {
 
 	private showContextMenu(x: number, y: number, file: TAbstractFile) {
 		const menu = new Menu();
-
-		menu.addItem((item) =>
-			item
-				.setTitle("Rename")
-				.setIcon("pencil")
-				.onClick(() => this.renameItem(file))
-		);
-
-		menu.addItem((item) =>
-			item
-				.setTitle("Delete")
-				.setIcon("trash")
-				.onClick(async () => {
-					await this.app.fileManager.trashFile(file);
-					new Notice(`Moved to trash: ${file.name}`);
-				})
-		);
-
-		if (file instanceof TFile) {
-			menu.addItem((item) =>
-				item
-					.setTitle("Open in new tab")
-					.setIcon("file-plus")
-					.onClick(() =>
-						this.app.workspace.getLeaf("tab").openFile(file)
-					)
-			);
-		}
-
+		this.app.workspace.trigger("file-menu", menu, file, "mobile-explorer");
 		menu.showAtPosition({ x, y });
 	}
 
@@ -611,22 +579,6 @@ export class MobileExplorerView extends ItemView {
 			true
 		);
 		await this.app.vault.createFolder(path);
-	}
-
-	private renameItem(file: TAbstractFile) {
-		new RenameModal(this.app, file, async (newName) => {
-			const isFolder = file instanceof TFolder;
-			const ext = isFolder ? "" : "." + (file as TFile).extension;
-			const parentPath = file.parent?.path ?? "";
-			const newPath = parentPath
-				? `${parentPath}/${newName}${ext}`
-				: `${newName}${ext}`;
-			try {
-				await this.app.fileManager.renameFile(file, newPath);
-			} catch (e) {
-				new Notice(`Rename failed: ${e}`);
-			}
-		}).open();
 	}
 
 	private getUniquePath(
@@ -656,63 +608,5 @@ export class MobileExplorerView extends ItemView {
 			if (!aIsFolder && bIsFolder) return 1;
 			return a.name.localeCompare(b.name);
 		});
-	}
-}
-
-class RenameModal extends Modal {
-	private file: TAbstractFile;
-	private onSubmit: (newName: string) => void;
-
-	constructor(
-		app: App,
-		file: TAbstractFile,
-		onSubmit: (newName: string) => void
-	) {
-		super(app);
-		this.file = file;
-		this.onSubmit = onSubmit;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		const isFolder = this.file instanceof TFolder;
-		const currentName = isFolder
-			? this.file.name
-			: (this.file as TFile).basename;
-
-		contentEl.createEl("h3", {
-			text: `Rename ${isFolder ? "folder" : "file"}`,
-		});
-
-		const input = new TextComponent(contentEl);
-		input.setValue(currentName);
-		input.inputEl.addClass("mobile-explorer-rename-input");
-		input.inputEl.addEventListener("keydown", (e) => {
-			if (e.key === "Enter") {
-				const val = input.getValue().trim();
-				if (val && val !== currentName) this.onSubmit(val);
-				this.close();
-			}
-		});
-
-		const btnRow = contentEl.createDiv("modal-button-container");
-		const submitBtn = btnRow.createEl("button", {
-			text: "Rename",
-			cls: "mod-cta",
-		});
-		submitBtn.addEventListener("click", () => {
-			const val = input.getValue().trim();
-			if (val && val !== currentName) this.onSubmit(val);
-			this.close();
-		});
-
-		setTimeout(() => {
-			input.inputEl.focus();
-			input.inputEl.select();
-		}, 50);
-	}
-
-	onClose() {
-		this.contentEl.empty();
 	}
 }

@@ -267,9 +267,99 @@
 	font-size: 15px;
 }
 
-/* ---- Rename modal ---- */
+/* ---- Desktop compact sizing ---- */
 
-.mobile-explorer-rename-input {
-	width: 100%;
-	margin-bottom: 12px;
+body:not(.is-mobile) .mobile-explorer-header {
+	padding: 2px 10px 4px;
+}
+
+body:not(.is-mobile) .mobile-explorer-nav {
+	padding: 2px 0;
+}
+
+body:not(.is-mobile) .mobile-explorer-back-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+body:not(.is-mobile) .mobile-explorer-back-label {
+	font-size: 13px;
+}
+
+body:not(.is-mobile) .mobile-explorer-title {
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: 0;
+}
+
+body:not(.is-mobile) .mobile-explorer-subtitle {
+	font-size: 11px;
+	padding-top: 0;
+	padding-bottom: 2px;
+}
+
+body:not(.is-mobile) .mobile-explorer-actions {
+	padding-bottom: 0;
+}
+
+body:not(.is-mobile) .mobile-explorer-action-btn {
+	width: 24px;
+	height: 24px;
+}
+
+body:not(.is-mobile) .mobile-explorer-action-btn svg {
+	width: 16px;
+	height: 16px;
+}
+
+body:not(.is-mobile) .mobile-explorer-section {
+	padding: 0 10px;
+	margin-bottom: 8px;
+}
+
+body:not(.is-mobile) .mobile-explorer-section-label {
+	font-size: 11px;
+	padding: 6px 0 3px;
+}
+
+body:not(.is-mobile) .mobile-explorer-section-card {
+	border-radius: 6px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item {
+	padding: 4px 10px;
+	min-height: 26px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item.is-folder .mobile-explorer-item-icon {
+	width: 18px;
+	height: 18px;
+	margin-right: 6px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item.is-folder .mobile-explorer-item-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item-name {
+	font-size: 13px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item-meta {
+	font-size: 11px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item-count {
+	font-size: 12px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item-chevron svg {
+	width: 12px;
+	height: 12px;
+}
+
+body:not(.is-mobile) .mobile-explorer-empty {
+	padding: 24px 10px;
+	font-size: 12px;
 }
