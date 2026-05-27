@@ -1,6 +1,7 @@
 import {
 	ItemView,
 	Menu,
+	Platform,
 	TAbstractFile,
 	TFile,
 	TFolder,
@@ -516,6 +517,7 @@ export class MobileExplorerView extends ItemView {
 	// --- Right-click context menu (desktop) ---
 
 	private addRightClick(el: HTMLElement, file: TAbstractFile) {
+		if (Platform.isMobile) return;
 		el.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
 			this.showContextMenu(e.clientX, e.clientY, file);
