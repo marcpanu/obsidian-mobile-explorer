@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-mobile-explorer",
-	"version": "1.0.10",
+	"version": "1.0.11",
 	"description": "Apple Notes-style drill-down file explorer for Obsidian mobile",
 	"main": "main.js",
 	"type": "module",
