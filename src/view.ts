@@ -567,7 +567,7 @@ export class MobileExplorerView extends ItemView {
 
 	private showContextMenu(x: number, y: number, file: TAbstractFile) {
 		const menu = new Menu();
-		this.app.workspace.trigger("file-menu", menu, file, "mobile-explorer");
+		this.app.workspace.trigger("file-menu", menu, file, "file-explorer-context-menu");
 		menu.showAtPosition({ x, y });
 	}
 
