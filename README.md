@@ -4,9 +4,13 @@ Replace the default Obsidian file explorer with an Apple Notes-style drill-down 
 
 ## Screenshots
 
-| Mobile | Desktop |
-|--------|---------|
-| ![Mobile](assets/mobile.png) | ![Desktop](assets/desktop.png) |
+Mobile 
+---
+![Mobile](assets/mobile.png) 
+
+Desktop
+---
+![Desktop](assets/desktop.png)
 
 ## Features
 
