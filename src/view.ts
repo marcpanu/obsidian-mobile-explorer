@@ -476,6 +476,7 @@ export class MobileExplorerView extends ItemView {
 		});
 
 		this.addLongPress(item, folder);
+		this.addRightClick(item, folder);
 		return item;
 	}
 
@@ -508,7 +509,17 @@ export class MobileExplorerView extends ItemView {
 		});
 
 		this.addLongPress(item, file);
+		this.addRightClick(item, file);
 		return item;
+	}
+
+	// --- Right-click context menu (desktop) ---
+
+	private addRightClick(el: HTMLElement, file: TAbstractFile) {
+		el.addEventListener("contextmenu", (e) => {
+			e.preventDefault();
+			this.showContextMenu(e.clientX, e.clientY, file);
+		});
 	}
 
 	// --- Long press / context menu ---
