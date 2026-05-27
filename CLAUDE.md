@@ -17,3 +17,7 @@ Releases are fully automated by `.github/workflows/release.yml`. Do not bump ver
 - To ship a change, just merge it to `main`. To merge something without releasing (docs, CI tweaks), put `[skip ci]` in the merge/squash commit message.
 
 Prerequisite: the workflow pushes to `main` with the default `GITHUB_TOKEN`, so the repo needs "Read and write permissions" under Settings → Actions → General → Workflow permissions, and no branch protection that blocks the Actions bot from pushing to `main`.
+
+## Git workflow
+
+Always `git fetch origin` before checking status or comparing with remote. The local repo may be behind if the CI workflow pushed version bumps.
