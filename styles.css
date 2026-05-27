@@ -10,13 +10,11 @@
 .workspace-leaf-content[data-type="mobile-explorer"] .view-content::before,
 .workspace-leaf-content[data-type="mobile-explorer"] .view-content > *::after,
 .workspace-leaf-content[data-type="mobile-explorer"] .view-content > *::before {
-	display: none !important;
-}
-
-.workspace-leaf-content[data-type="mobile-explorer"],
-.workspace-leaf-content[data-type="mobile-explorer"] .view-content {
-	-webkit-mask-image: none !important;
-	mask-image: none !important;
+	content: none;
+	display: none;
+	background: none;
+	width: 0;
+	height: 0;
 }
 
 /* ---- Container ---- */
