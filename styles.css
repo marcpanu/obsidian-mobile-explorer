@@ -331,6 +331,10 @@ body:not(.is-mobile) .mobile-explorer-item {
 	min-height: 26px;
 }
 
+body:not(.is-mobile) .mobile-explorer-item.is-folder {
+	padding: 7px 10px;
+}
+
 body:not(.is-mobile) .mobile-explorer-item.is-folder .mobile-explorer-item-icon {
 	width: 18px;
 	height: 18px;
