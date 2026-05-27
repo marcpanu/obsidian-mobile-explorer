@@ -567,7 +567,128 @@ export class MobileExplorerView extends ItemView {
 
 	private showContextMenu(x: number, y: number, file: TAbstractFile) {
 		const menu = new Menu();
+
+		// The native file explorer adds core items (Open in new tab, Rename,
+		// Delete, etc.) directly to the Menu *before* firing the "file-menu"
+		// event.  The event only lets other plugins append their own items.
+		// We must therefore add the core items ourselves.
+
+		if (file instanceof TFile) {
+			menu.addItem((item) =>
+				item
+					.setTitle("Open in new tab")
+					.setIcon("lucide-file-plus")
+					.setSection("open")
+					.onClick(() => {
+						this.app.workspace.getLeaf("tab").openFile(file);
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Open to the right")
+					.setIcon("lucide-separator-vertical")
+					.setSection("open")
+					.onClick(() => {
+						this.app.workspace.getLeaf("split").openFile(file);
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("Open in new window")
+					.setIcon("lucide-picture-in-picture-2")
+					.setSection("open")
+					.onClick(() => {
+						this.app.workspace.getLeaf("window").openFile(file);
+					})
+			);
+			menu.addSeparator();
+			menu.addItem((item) =>
+				item
+					.setTitle("Duplicate")
+					.setIcon("lucide-files")
+					.setSection("action")
+					.onClick(async () => {
+						const parent = file.parent ?? this.app.vault.getRoot();
+						const basePath = parent.path
+							? `${parent.path}/${file.basename}`
+							: file.basename;
+						// Find a unique name for the copy
+						let newPath = `${basePath} copy.${file.extension}`;
+						let counter = 1;
+						while (this.app.vault.getAbstractFileByPath(newPath)) {
+							counter++;
+							newPath = `${basePath} copy ${counter}.${file.extension}`;
+						}
+						await this.app.vault.copy(file, newPath);
+					})
+			);
+		}
+
+		if (file instanceof TFolder) {
+			menu.addItem((item) =>
+				item
+					.setTitle("New note")
+					.setIcon("lucide-edit")
+					.setSection("action")
+					.onClick(async () => {
+						const path = this.getUniquePath(file.path, "Untitled", false);
+						const newFile = await this.app.vault.create(path, "");
+						this.app.workspace.getLeaf(false).openFile(newFile);
+					})
+			);
+			menu.addItem((item) =>
+				item
+					.setTitle("New folder")
+					.setIcon("lucide-folder-plus")
+					.setSection("action")
+					.onClick(async () => {
+						const path = this.getUniquePath(file.path, "New folder", true);
+						await this.app.vault.createFolder(path);
+					})
+			);
+			menu.addSeparator();
+		}
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Rename...")
+				.setIcon("lucide-pencil")
+				.setSection("danger")
+				.onClick(() => {
+					// Use the undocumented inline-rename if available,
+					// otherwise fall back to the documented API.
+					const fm = this.app.fileManager as any;
+					if (typeof fm.promptForFileRename === "function") {
+						fm.promptForFileRename(file);
+					} else {
+						// Fallback: use a simple prompt
+						const newName = prompt("Rename to:", file.name);
+						if (newName && newName !== file.name) {
+							const parentPath = file.parent?.path ?? "";
+							const newPath = parentPath
+								? `${parentPath}/${newName}`
+								: newName;
+							this.app.fileManager.renameFile(file, newPath);
+						}
+					}
+				})
+		);
+		menu.addItem((item) => {
+			item
+				.setTitle("Delete")
+				.setIcon("lucide-trash-2")
+				.setSection("danger")
+				.setWarning(true)
+				.onClick(() => {
+					this.app.fileManager.promptForDeletion(file);
+				});
+		});
+
+		// Now let other plugins contribute their items (Copy path,
+		// Open in default app, Reveal in Finder, Move file to...,
+		// Bookmark, etc.)
 		this.app.workspace.trigger("file-menu", menu, file, "file-explorer-context-menu");
+
 		menu.showAtPosition({ x, y });
 	}
 
