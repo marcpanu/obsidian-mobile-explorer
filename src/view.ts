@@ -1,7 +1,6 @@
 import {
 	ItemView,
 	Menu,
-	Platform,
 	TAbstractFile,
 	TFile,
 	TFolder,
@@ -476,8 +475,7 @@ export class MobileExplorerView extends ItemView {
 			this.enterFolder(folder);
 		});
 
-		this.addLongPress(item, folder);
-		this.addRightClick(item, folder);
+		this.addContextMenu(item, folder);
 		return item;
 	}
 
@@ -509,63 +507,17 @@ export class MobileExplorerView extends ItemView {
 			this.openFile(file);
 		});
 
-		this.addLongPress(item, file);
-		this.addRightClick(item, file);
+		this.addContextMenu(item, file);
 		return item;
 	}
 
 	// --- Right-click context menu (desktop) ---
 
-	private addRightClick(el: HTMLElement, file: TAbstractFile) {
+	private addContextMenu(el: HTMLElement, file: TAbstractFile) {
 		el.addEventListener("contextmenu", (e) => {
 			e.preventDefault();
-			e.stopPropagation();
-			if (!Platform.isMobile) {
-				this.showContextMenu(e.clientX, e.clientY, file);
-			}
-		});
-	}
-
-	// --- Long press / context menu ---
-
-	private addLongPress(el: HTMLElement, file: TAbstractFile) {
-		let timer: number | null = null;
-		let pressX = 0;
-		let pressY = 0;
-
-		el.addEventListener(
-			"touchstart",
-			(e) => {
-				const touch = e.touches[0];
-				if (!touch) return;
-				pressX = touch.clientX;
-				pressY = touch.clientY;
-				timer = window.setTimeout(() => {
-					timer = null;
-					this.longPressTriggered = true;
-					this.showContextMenu(pressX, pressY, file);
-				}, 500);
-			},
-			{ passive: true }
-		);
-
-		el.addEventListener("touchmove", (e) => {
-			if (timer === null) return;
-			const touch = e.touches[0];
-			if (!touch) return;
-			const dx = touch.clientX - pressX;
-			const dy = touch.clientY - pressY;
-			if (dx * dx + dy * dy > 100) {
-				window.clearTimeout(timer);
-				timer = null;
-			}
-		});
-
-		el.addEventListener("touchend", () => {
-			if (timer !== null) {
-				window.clearTimeout(timer);
-				timer = null;
-			}
+			this.longPressTriggered = true;
+			this.showContextMenu(e.clientX, e.clientY, file);
 		});
 	}
 
