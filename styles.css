@@ -178,6 +178,27 @@
 	transition: background 1s ease;
 }
 
+/* Multi-selected file (desktop cmd/ctrl+click) */
+.mobile-explorer-item.is-selected {
+	background: var(--background-modifier-hover);
+	box-shadow: inset 2px 0 0 var(--interactive-accent);
+}
+
+/* Drag & drop (desktop) */
+.mobile-explorer-item.is-dragging {
+	opacity: 0.4;
+}
+
+.mobile-explorer-item.is-drop-target {
+	background: var(--background-modifier-hover);
+	box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+.mobile-explorer-nav.is-drop-target {
+	background: var(--background-modifier-hover);
+	border-radius: 6px;
+}
+
 /* Folder icon */
 .mobile-explorer-item.is-folder .mobile-explorer-item-icon {
 	display: flex;
@@ -327,6 +348,11 @@ body:not(.is-mobile) .mobile-explorer-section-card {
 body:not(.is-mobile) .mobile-explorer-item {
 	padding: 4px 10px;
 	min-height: 26px;
+}
+
+body:not(.is-mobile) .mobile-explorer-item:hover {
+	background: var(--background-modifier-hover);
+	cursor: default;
 }
 
 body:not(.is-mobile) .mobile-explorer-item.is-folder {
