@@ -84,16 +84,20 @@ export class MobileExplorerView extends ItemView {
 	private registerVaultEvents() {
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
-				if (this.isInCurrentFolder(file)) this.debouncedRefresh();
+				if (this.isPathInCurrentFolder(file.path)) this.debouncedRefresh();
 			})
 		);
 		this.registerEvent(
 			this.app.vault.on("delete", (file) => {
-				if (file.path === this.currentFolder.path) {
+				// If the current folder (or one of its ancestors) was deleted,
+				// fall back to the root so we're not showing a defunct folder.
+				if (this.isCurrentFolderAtOrUnder(file.path)) {
 					this.setFolder(this.app.vault.getRoot());
 					return;
 				}
-				if (this.isInCurrentFolder(file)) this.debouncedRefresh();
+				// Note: Obsidian nulls file.parent before firing "delete", so the
+				// parent must be derived from the path rather than file.parent.
+				if (this.isPathInCurrentFolder(file.path)) this.debouncedRefresh();
 			})
 		);
 		this.registerEvent(
@@ -107,8 +111,8 @@ export class MobileExplorerView extends ItemView {
 					return;
 				}
 				if (
-					this.isInCurrentFolder(file) ||
-					this.wasInCurrentFolder(oldPath)
+					this.isPathInCurrentFolder(file.path) ||
+					this.isPathInCurrentFolder(oldPath)
 				) {
 					this.debouncedRefresh();
 				}
@@ -116,14 +120,17 @@ export class MobileExplorerView extends ItemView {
 		);
 	}
 
-	private isInCurrentFolder(file: TAbstractFile): boolean {
-		return file.parent?.path === this.currentFolder.path;
+	private isPathInCurrentFolder(path: string): boolean {
+		const lastSlash = path.lastIndexOf("/");
+		const parentPath = lastSlash === -1 ? "" : path.substring(0, lastSlash);
+		return parentPath === this.currentFolder.path;
 	}
 
-	private wasInCurrentFolder(oldPath: string): boolean {
-		const lastSlash = oldPath.lastIndexOf("/");
-		const parentPath = lastSlash === -1 ? "" : oldPath.substring(0, lastSlash);
-		return parentPath === this.currentFolder.path;
+	private isCurrentFolderAtOrUnder(path: string): boolean {
+		return (
+			this.currentFolder.path === path ||
+			this.currentFolder.path.startsWith(path + "/")
+		);
 	}
 
 	private debouncedRefresh() {
