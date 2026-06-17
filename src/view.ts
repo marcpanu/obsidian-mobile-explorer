@@ -357,11 +357,9 @@ export class MobileExplorerView extends ItemView {
 				? this.currentFolder.parent.name
 				: this.app.vault.getName();
 			nav.addEventListener("click", () => this.navigateToParent());
-			if (this.isDesktop) {
-				this.setupDropZone(nav, {
-					springNavigate: () => this.navigateToParent(),
-				});
-			}
+			this.setupDropZone(nav, {
+				springNavigate: () => this.navigateToParent(),
+			});
 		}
 
 		const titleRow = this.headerEl.createDiv("mobile-explorer-title-row");
@@ -523,15 +521,13 @@ export class MobileExplorerView extends ItemView {
 			this.enterFolder(folder);
 		});
 
-		if (this.isDesktop) {
-			if (this.selectedPaths.has(folder.path)) item.addClass("is-selected");
-			this.setupDragSource(item, folder);
-			this.setupDropZone(item, {
-				canDrop: () => this.canDropInto(folder),
-				onDrop: () => this.moveItemsToFolder(this.draggedPaths, folder),
-				springNavigate: () => this.enterFolder(folder),
-			});
-		}
+		if (this.selectedPaths.has(folder.path)) item.addClass("is-selected");
+		this.setupDragSource(item, folder);
+		this.setupDropZone(item, {
+			canDrop: () => this.canDropInto(folder),
+			onDrop: () => this.moveItemsToFolder(this.draggedPaths, folder),
+			springNavigate: () => this.enterFolder(folder),
+		});
 
 		this.addContextMenu(item, folder);
 		return item;
@@ -564,9 +560,9 @@ export class MobileExplorerView extends ItemView {
 					`Created at ${this.formatFullDateTime(file.stat.ctime)}`,
 				{ placement: "right" }
 			);
-			if (this.selectedPaths.has(file.path)) item.addClass("is-selected");
-			this.setupDragSource(item, file);
 		}
+		if (this.selectedPaths.has(file.path)) item.addClass("is-selected");
+		this.setupDragSource(item, file);
 
 		item.addEventListener("click", (e) => {
 			if (this.longPressTriggered) {
