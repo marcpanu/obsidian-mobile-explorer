@@ -178,7 +178,7 @@
 	transition: background 1s ease;
 }
 
-/* Multi-selected file (desktop cmd/ctrl+click) */
+/* Multi-selected item (desktop cmd/ctrl+click) */
 .mobile-explorer-item.is-selected {
 	background: var(--background-modifier-hover);
 	box-shadow: inset 2px 0 0 var(--interactive-accent);

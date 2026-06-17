@@ -25,14 +25,14 @@ export class MobileExplorerView extends ItemView {
 
 	// Desktop-only interactions (hover tooltips, multi-select, drag & drop).
 	private readonly isDesktop = Platform.isDesktop;
-	// Multi-selected file paths (desktop, cmd/ctrl+click).
+	// Multi-selected item paths (desktop, cmd/ctrl+click).
 	private selectedPaths = new Set<string>();
 	// Rendered file/folder item elements by path, for live class updates.
 	private itemEls = new Map<string, HTMLElement>();
 	// Paths being dragged in the current drag operation.
 	private draggedPaths: string[] = [];
-	// Spring-loaded "navigate back" timer while dragging over the back nav.
-	private backNavTimer: number | null = null;
+	// Spring-loaded hover timer for navigating while dragging.
+	private springTimer: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -357,7 +357,11 @@ export class MobileExplorerView extends ItemView {
 				? this.currentFolder.parent.name
 				: this.app.vault.getName();
 			nav.addEventListener("click", () => this.navigateToParent());
-			if (this.isDesktop) this.setupBackNavDrop(nav);
+			if (this.isDesktop) {
+				this.setupDropZone(nav, {
+					springNavigate: () => this.navigateToParent(),
+				});
+			}
 		}
 
 		const titleRow = this.headerEl.createDiv("mobile-explorer-title-row");
@@ -506,17 +510,27 @@ export class MobileExplorerView extends ItemView {
 		const chevron = item.createDiv("mobile-explorer-item-chevron");
 		setIcon(chevron, "chevron-right");
 
-		item.addEventListener("click", () => {
+		item.addEventListener("click", (e) => {
 			if (this.longPressTriggered) {
 				this.longPressTriggered = false;
 				return;
 			}
+			if (this.isDesktop && (e.metaKey || e.ctrlKey)) {
+				this.toggleSelection(folder);
+				return;
+			}
+			if (this.selectedPaths.size > 0) this.clearSelection();
 			this.enterFolder(folder);
 		});
 
 		if (this.isDesktop) {
+			if (this.selectedPaths.has(folder.path)) item.addClass("is-selected");
 			this.setupDragSource(item, folder);
-			this.setupFolderDropTarget(item, folder);
+			this.setupDropZone(item, {
+				canDrop: () => this.canDropInto(folder),
+				onDrop: () => this.moveItemsToFolder(this.draggedPaths, folder),
+				springNavigate: () => this.enterFolder(folder),
+			});
 		}
 
 		this.addContextMenu(item, folder);
@@ -578,10 +592,9 @@ export class MobileExplorerView extends ItemView {
 			e.preventDefault();
 			this.longPressTriggered = true;
 
-			// If right-clicking a file within an active multi-selection, act on
+			// If right-clicking an item within an active multi-selection, act on
 			// the whole group. Right-clicking anything else clears the selection.
 			if (
-				file instanceof TFile &&
 				this.selectedPaths.size > 1 &&
 				this.selectedPaths.has(file.path)
 			) {
@@ -594,23 +607,26 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private showSelectionMenu(x: number, y: number) {
-		const files = this.getSelectedFiles();
+		const items = this.getSelectedItems();
+		const files = items.filter((f) => f instanceof TFile) as TFile[];
 		const menu = new Menu();
+		if (files.length > 0) {
+			menu.addItem((item) =>
+				item
+					.setTitle(`Copy ${files.length} file${files.length !== 1 ? "s" : ""}`)
+					.setIcon("lucide-files")
+					.onClick(async () => {
+						for (const f of files) await this.duplicateFile(f);
+					})
+			);
+		}
 		menu.addItem((item) =>
 			item
-				.setTitle(`Copy ${files.length} files`)
-				.setIcon("lucide-files")
-				.onClick(async () => {
-					for (const f of files) await this.duplicateFile(f);
-				})
-		);
-		menu.addItem((item) =>
-			item
-				.setTitle(`Delete ${files.length} files`)
+				.setTitle(`Delete ${items.length} item${items.length !== 1 ? "s" : ""}`)
 				.setIcon("lucide-trash-2")
 				.setWarning(true)
 				.onClick(async () => {
-					for (const f of files) await this.app.fileManager.trashFile(f);
+					for (const f of items) await this.app.fileManager.trashFile(f);
 					this.clearSelection();
 				})
 		);
@@ -748,7 +764,7 @@ export class MobileExplorerView extends ItemView {
 
 	// --- Multi-selection (desktop) ---
 
-	private toggleSelection(file: TFile) {
+	private toggleSelection(file: TAbstractFile) {
 		if (this.selectedPaths.has(file.path)) {
 			this.selectedPaths.delete(file.path);
 			this.itemEls.get(file.path)?.removeClass("is-selected");
@@ -765,13 +781,13 @@ export class MobileExplorerView extends ItemView {
 		this.selectedPaths.clear();
 	}
 
-	private getSelectedFiles(): TFile[] {
-		const files: TFile[] = [];
+	private getSelectedItems(): TAbstractFile[] {
+		const items: TAbstractFile[] = [];
 		for (const path of this.selectedPaths) {
 			const f = this.app.vault.getAbstractFileByPath(path);
-			if (f instanceof TFile) files.push(f);
+			if (f) items.push(f);
 		}
-		return files;
+		return items;
 	}
 
 	// --- Drag & drop (desktop) ---
@@ -779,10 +795,8 @@ export class MobileExplorerView extends ItemView {
 	private setupDragSource(item: HTMLElement, file: TAbstractFile) {
 		item.draggable = true;
 		item.addEventListener("dragstart", (e) => {
-			// Drag the whole selection when grabbing a selected file,
-			// otherwise just the item under the cursor.
 			let paths: string[];
-			if (file instanceof TFile && this.selectedPaths.has(file.path)) {
+			if (this.selectedPaths.has(file.path)) {
 				paths = [...this.selectedPaths];
 			} else {
 				if (this.selectedPaths.size > 0) this.clearSelection();
@@ -798,84 +812,60 @@ export class MobileExplorerView extends ItemView {
 				this.itemEls.get(p)?.removeClass("is-dragging");
 			}
 			this.draggedPaths = [];
-			this.clearBackNavTimer();
+			this.clearSpringTimer();
 		});
 	}
 
-	private setupFolderDropTarget(item: HTMLElement, folder: TFolder) {
-		item.addEventListener("dragover", (e) => {
+	private setupDropZone(
+		el: HTMLElement,
+		opts: {
+			canDrop?: () => boolean;
+			onDrop?: () => void;
+			springNavigate?: () => void;
+		}
+	) {
+		el.addEventListener("dragover", (e) => {
 			if (this.draggedPaths.length === 0) return;
-			if (!this.canDropInto(folder)) return;
+			if (opts.canDrop && !opts.canDrop()) return;
 			e.preventDefault();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-			item.addClass("is-drop-target");
-		});
-		item.addEventListener("dragleave", (e) => {
-			// Ignore leaves into child elements; only react when truly exiting.
-			if (e.relatedTarget instanceof Node && item.contains(e.relatedTarget)) {
-				return;
-			}
-			item.removeClass("is-drop-target");
-		});
-		item.addEventListener("drop", (e) => {
-			e.preventDefault();
-			item.removeClass("is-drop-target");
-			void this.moveItemsToFolder(this.draggedPaths, folder);
-		});
-	}
-
-	private setupBackNavDrop(nav: HTMLElement) {
-		const parent = this.currentFolder.parent;
-		nav.addEventListener("dragover", (e) => {
-			if (this.draggedPaths.length === 0) return;
-			e.preventDefault();
-			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-			nav.addClass("is-drop-target");
-			// Spring-loaded: hovering over the back nav navigates up so the
-			// user can drill to the destination folder mid-drag.
-			if (this.backNavTimer === null) {
-				this.backNavTimer = window.setTimeout(() => {
-					this.backNavTimer = null;
-					this.navigateToParent();
+			el.addClass("is-drop-target");
+			if (opts.springNavigate && this.springTimer === null) {
+				this.springTimer = window.setTimeout(() => {
+					this.springTimer = null;
+					opts.springNavigate!();
 				}, 700);
 			}
 		});
-		nav.addEventListener("dragleave", (e) => {
-			if (e.relatedTarget instanceof Node && nav.contains(e.relatedTarget)) {
+		el.addEventListener("dragleave", (e) => {
+			if (e.relatedTarget instanceof Node && el.contains(e.relatedTarget))
 				return;
-			}
-			nav.removeClass("is-drop-target");
-			this.clearBackNavTimer();
+			el.removeClass("is-drop-target");
+			this.clearSpringTimer();
 		});
-		nav.addEventListener("drop", (e) => {
-			e.preventDefault();
-			nav.removeClass("is-drop-target");
-			this.clearBackNavTimer();
-			// Dropping on the back nav moves the items up to the parent folder.
-			if (parent) void this.moveItemsToFolder(this.draggedPaths, parent);
-		});
+		if (opts.onDrop) {
+			el.addEventListener("drop", (e) => {
+				e.preventDefault();
+				el.removeClass("is-drop-target");
+				this.clearSpringTimer();
+				opts.onDrop!();
+			});
+		}
 	}
 
-	private clearBackNavTimer() {
-		if (this.backNavTimer !== null) {
-			window.clearTimeout(this.backNavTimer);
-			this.backNavTimer = null;
+	private clearSpringTimer() {
+		if (this.springTimer !== null) {
+			window.clearTimeout(this.springTimer);
+			this.springTimer = null;
 		}
 	}
 
 	private canDropInto(target: TFolder): boolean {
 		for (const path of this.draggedPaths) {
 			const f = this.app.vault.getAbstractFileByPath(path);
-			if (!f) continue;
-			// Can't drop into the folder an item already lives in.
-			if (f.parent?.path === target.path) return false;
-			// Can't drop a folder into itself or one of its descendants.
-			if (
-				f instanceof TFolder &&
-				(target.path === f.path || target.path.startsWith(f.path + "/"))
-			) {
+			if (!(f instanceof TFolder)) continue;
+			if (target.path === f.path || target.path.startsWith(f.path + "/"))
 				return false;
-			}
 		}
 		return true;
 	}
