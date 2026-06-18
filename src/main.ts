@@ -6,14 +6,14 @@ export default class MobileExplorerPlugin extends Plugin {
 		this.registerView(VIEW_TYPE, (leaf) => new MobileExplorerView(leaf));
 
 		this.addCommand({
-			id: "open-mobile-explorer",
-			name: "Open mobile explorer",
+			id: "open",
+			name: "Open",
 			callback: () => this.activateView(),
 		});
 
 		this.addCommand({
 			id: "reveal-active-file",
-			name: "Reveal active file in mobile explorer",
+			name: "Reveal active file",
 			callback: () => this.revealActiveFile(),
 		});
 
@@ -23,13 +23,13 @@ export default class MobileExplorerPlugin extends Plugin {
 	private async activateView() {
 		const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE);
 		if (existing.length > 0) {
-			this.app.workspace.revealLeaf(existing[0]);
+			void this.app.workspace.revealLeaf(existing[0]);
 			return;
 		}
 		const leaf = this.app.workspace.getLeftLeaf(false);
 		if (leaf) {
 			await leaf.setViewState({ type: VIEW_TYPE, active: true });
-			this.app.workspace.revealLeaf(leaf);
+			void this.app.workspace.revealLeaf(leaf);
 		}
 	}
 
@@ -40,7 +40,7 @@ export default class MobileExplorerPlugin extends Plugin {
 		if (leaves.length > 0) {
 			const view = leaves[0].view as MobileExplorerView;
 			view.revealFile(file);
-			this.app.workspace.revealLeaf(leaves[0]);
+			void this.app.workspace.revealLeaf(leaves[0]);
 		}
 	}
 }

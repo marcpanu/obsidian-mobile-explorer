@@ -1,4 +1,5 @@
 import {
+	FileManager,
 	ItemView,
 	Menu,
 	Notice,
@@ -166,7 +167,7 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private openFile(file: TFile) {
-		this.app.workspace.getLeaf(false).openFile(file);
+		void this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	// --- Animation ---
@@ -180,11 +181,9 @@ export class MobileExplorerView extends ItemView {
 		const newList = this.wrapperEl.createDiv("mobile-explorer-list");
 
 		if (direction === "forward") {
-			newList.style.transform = "translateX(100%)";
-			newList.style.opacity = "1";
+			newList.setCssStyles({ transform: "translateX(100%)", opacity: "1" });
 		} else {
-			newList.style.transform = "translateX(-30%)";
-			newList.style.opacity = "0.3";
+			newList.setCssStyles({ transform: "translateX(-30%)", opacity: "0.3" });
 		}
 
 		this.listEl = newList;
@@ -193,15 +192,12 @@ export class MobileExplorerView extends ItemView {
 		void newList.offsetHeight;
 
 		if (direction === "forward") {
-			oldList.style.transform = "translateX(-30%)";
-			oldList.style.opacity = "0";
+			oldList.setCssStyles({ transform: "translateX(-30%)", opacity: "0" });
 		} else {
-			oldList.style.transform = "translateX(100%)";
-			oldList.style.opacity = "0";
+			oldList.setCssStyles({ transform: "translateX(100%)", opacity: "0" });
 		}
 
-		newList.style.transform = "translateX(0)";
-		newList.style.opacity = "1";
+		newList.setCssStyles({ transform: "translateX(0)", opacity: "1" });
 
 		const cleanup = () => {
 			oldList.remove();
@@ -216,7 +212,7 @@ export class MobileExplorerView extends ItemView {
 		};
 
 		newList.addEventListener("transitionend", safeCleanup, { once: true });
-		setTimeout(safeCleanup, 350);
+		window.setTimeout(safeCleanup, 350);
 	}
 
 	// --- Swipe back gesture ---
@@ -267,8 +263,8 @@ export class MobileExplorerView extends ItemView {
 					prevList = this.wrapperEl.createDiv("mobile-explorer-list");
 					this.wrapperEl.insertBefore(prevList, this.listEl);
 					this.renderFolderInto(prevList, parent, this.currentFolder.path);
-					prevList.style.transition = "none";
-					this.listEl.style.transition = "none";
+					prevList.setCssStyles({ transition: "none" });
+					this.listEl.setCssStyles({ transition: "none" });
 				}
 
 				// Claim the gesture so it drags the view instead of scrolling
@@ -278,9 +274,11 @@ export class MobileExplorerView extends ItemView {
 
 				const offset = Math.max(0, Math.min(dx, width));
 				const progress = offset / width;
-				this.listEl.style.transform = `translateX(${offset}px)`;
-				prevList.style.transform = `translateX(${-30 * (1 - progress)}%)`;
-				prevList.style.opacity = String(0.3 + 0.7 * progress);
+				this.listEl.setCssStyles({ transform: `translateX(${offset}px)` });
+				prevList.setCssStyles({
+					transform: `translateX(${-30 * (1 - progress)}%)`,
+					opacity: String(0.3 + 0.7 * progress),
+				});
 			},
 			{ passive: false }
 		);
@@ -301,30 +299,26 @@ export class MobileExplorerView extends ItemView {
 			this.isAnimating = true;
 			const settle =
 				"transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.3s ease";
-			outgoing.style.transition = settle;
-			incoming.style.transition = settle;
+			outgoing.setCssStyles({ transition: settle });
+			incoming.setCssStyles({ transition: settle });
 
 			if (complete && parent) {
-				outgoing.style.transform = "translateX(100%)";
-				outgoing.style.opacity = "0";
-				incoming.style.transform = "translateX(0)";
-				incoming.style.opacity = "1";
+				outgoing.setCssStyles({ transform: "translateX(100%)", opacity: "0" });
+				incoming.setCssStyles({ transform: "translateX(0)", opacity: "1" });
 				this.onSettle(incoming, () => {
 					outgoing.remove();
-					incoming.style.transition = "";
+					incoming.setCssStyles({ transition: "" });
 					this.listEl = incoming;
 					this.currentFolder = parent;
 					this.renderHeader();
 					this.isAnimating = false;
 				});
 			} else {
-				outgoing.style.transform = "translateX(0)";
-				outgoing.style.opacity = "1";
-				incoming.style.transform = "translateX(-30%)";
-				incoming.style.opacity = "0";
+				outgoing.setCssStyles({ transform: "translateX(0)", opacity: "1" });
+				incoming.setCssStyles({ transform: "translateX(-30%)", opacity: "0" });
 				this.onSettle(outgoing, () => {
 					incoming.remove();
-					outgoing.style.transition = "";
+					outgoing.setCssStyles({ transition: "" });
 					this.isAnimating = false;
 				});
 			}
@@ -339,7 +333,7 @@ export class MobileExplorerView extends ItemView {
 			cb();
 		};
 		el.addEventListener("transitionend", fire, { once: true });
-		setTimeout(fire, 350);
+		window.setTimeout(fire, 350);
 	}
 
 	// --- Rendering ---
@@ -372,11 +366,11 @@ export class MobileExplorerView extends ItemView {
 
 		const newFolderBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newFolderBtn, "folder-plus");
-		newFolderBtn.addEventListener("click", () => this.createNewFolder());
+		newFolderBtn.addEventListener("click", () => void this.createNewFolder());
 
 		const newNoteBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newNoteBtn, "square-pen");
-		newNoteBtn.addEventListener("click", () => this.createNewNote());
+		newNoteBtn.addEventListener("click", () => void this.createNewNote());
 
 		const children = this.currentFolder.children;
 		const folders = children.filter((c) => c instanceof TFolder);
@@ -487,7 +481,7 @@ export class MobileExplorerView extends ItemView {
 		if (restoreEl) {
 			restoreEl.addClass("is-highlighted");
 			restoreEl.scrollIntoView({ block: "center" });
-			setTimeout(() => restoreEl?.removeClass("is-highlighted"), 1000);
+			window.setTimeout(() => restoreEl?.removeClass("is-highlighted"), 1000);
 		}
 	}
 
@@ -525,7 +519,7 @@ export class MobileExplorerView extends ItemView {
 		this.setupDragSource(item, folder);
 		this.setupDropZone(item, {
 			canDrop: () => this.canDropInto(folder),
-			onDrop: () => this.moveItemsToFolder(this.draggedPaths, folder),
+			onDrop: () => void this.moveItemsToFolder(this.draggedPaths, folder),
 			springNavigate: () => this.enterFolder(folder),
 		});
 
@@ -644,7 +638,7 @@ export class MobileExplorerView extends ItemView {
 					.setIcon("lucide-file-plus")
 					.setSection("open")
 					.onClick(() => {
-						this.app.workspace.getLeaf("tab").openFile(file);
+						void this.app.workspace.getLeaf("tab").openFile(file);
 					})
 			);
 			menu.addItem((item) =>
@@ -653,7 +647,7 @@ export class MobileExplorerView extends ItemView {
 					.setIcon("lucide-separator-vertical")
 					.setSection("open")
 					.onClick(() => {
-						this.app.workspace.getLeaf("split").openFile(file);
+						void this.app.workspace.getLeaf("split").openFile(file);
 					})
 			);
 			menu.addItem((item) =>
@@ -662,7 +656,7 @@ export class MobileExplorerView extends ItemView {
 					.setIcon("lucide-picture-in-picture-2")
 					.setSection("open")
 					.onClick(() => {
-						this.app.workspace.getLeaf("window").openFile(file);
+						void this.app.workspace.getLeaf("window").openFile(file);
 					})
 			);
 			menu.addSeparator();
@@ -671,7 +665,7 @@ export class MobileExplorerView extends ItemView {
 					.setTitle("Duplicate")
 					.setIcon("lucide-files")
 					.setSection("action")
-					.onClick(() => this.duplicateFile(file))
+					.onClick(() => void this.duplicateFile(file))
 			);
 		}
 
@@ -684,7 +678,7 @@ export class MobileExplorerView extends ItemView {
 					.onClick(async () => {
 						const path = this.getUniquePath(file.path, "Untitled", false);
 						const newFile = await this.app.vault.create(path, "");
-						this.app.workspace.getLeaf(false).openFile(newFile);
+						void this.app.workspace.getLeaf(false).openFile(newFile);
 					})
 			);
 			menu.addItem((item) =>
@@ -706,22 +700,7 @@ export class MobileExplorerView extends ItemView {
 				.setIcon("lucide-pencil")
 				.setSection("danger")
 				.onClick(() => {
-					// Use the undocumented inline-rename if available,
-					// otherwise fall back to the documented API.
-					const fm = this.app.fileManager as any;
-					if (typeof fm.promptForFileRename === "function") {
-						fm.promptForFileRename(file);
-					} else {
-						// Fallback: use a simple prompt
-						const newName = prompt("Rename to:", file.name);
-						if (newName && newName !== file.name) {
-							const parentPath = file.parent?.path ?? "";
-							const newPath = parentPath
-								? `${parentPath}/${newName}`
-								: newName;
-							this.app.fileManager.renameFile(file, newPath);
-						}
-					}
+					(this.app.fileManager as FileManager & { promptForFileRename(file: TAbstractFile): void }).promptForFileRename(file);
 				})
 		);
 		menu.addItem((item) => {
@@ -731,7 +710,7 @@ export class MobileExplorerView extends ItemView {
 				.setSection("danger")
 				.setWarning(true)
 				.onClick(() => {
-					this.app.fileManager.promptForDeletion(file);
+					void this.app.fileManager.promptForDeletion(file);
 				});
 		});
 
@@ -888,7 +867,7 @@ export class MobileExplorerView extends ItemView {
 			try {
 				await this.app.fileManager.renameFile(f, newPath);
 				moved++;
-			} catch (err) {
+			} catch {
 				new Notice(`Could not move "${f.name}"`);
 			}
 		}
