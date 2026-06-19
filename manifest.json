@@ -1,7 +1,7 @@
 {
 	"id": "mobile-explorer",
 	"name": "Mobile Explorer",
-	"version": "1.0.19",
+	"version": "1.0.20",
 	"minAppVersion": "1.7.2",
 	"description": "Replace the file explorer with an Apple Notes-style drill-down navigator.",
 	"author": "Marc Panu",
