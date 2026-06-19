@@ -409,9 +409,7 @@ export class MobileExplorerView extends ItemView {
 			if (this.isDesktop) {
 				setTooltip(btn, folder.name, { placement: "bottom" });
 			}
-			btn.addEventListener("click", () =>
-				this.setFolder(folder as TFolder)
-			);
+			btn.addEventListener("click", () => this.setFolder(folder));
 		}
 	}
 
@@ -470,8 +468,8 @@ export class MobileExplorerView extends ItemView {
 			return;
 		}
 
-		const folders = children.filter((c) => c instanceof TFolder) as TFolder[];
-		const files = children.filter((c) => c instanceof TFile) as TFile[];
+		const folders = children.filter((c) => c instanceof TFolder);
+		const files = children.filter((c) => c instanceof TFile);
 
 		let restoreEl: HTMLElement | null = null;
 
@@ -627,7 +625,7 @@ export class MobileExplorerView extends ItemView {
 
 	private showSelectionMenu(x: number, y: number) {
 		const items = this.getSelectedItems();
-		const files = items.filter((f) => f instanceof TFile) as TFile[];
+		const files = items.filter((f) => f instanceof TFile);
 		const menu = new Menu();
 		if (files.length > 0) {
 			menu.addItem((item) =>

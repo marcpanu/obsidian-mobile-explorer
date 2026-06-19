@@ -70,7 +70,7 @@ export default class MobileExplorerPlugin extends Plugin {
 		this.settings = Object.assign(
 			{},
 			DEFAULT_SETTINGS,
-			await this.loadData()
+			(await this.loadData()) as Partial<MobileExplorerSettings>
 		);
 	}
 
@@ -136,11 +136,10 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 		const folders = this.getAllFolders(this.plugin.app.vault);
 		const shortcuts = this.plugin.settings.shortcuts;
 
-		containerEl.createEl("h3", { text: "Shortcut buttons" });
-		containerEl.createEl("p", {
-			text: "Up to 3 folder shortcuts displayed in the header bar.",
-			cls: "setting-item-description",
-		});
+		new Setting(containerEl)
+			.setName("Shortcut buttons")
+			.setDesc("Up to 3 folder shortcuts displayed in the header bar.")
+			.setHeading();
 
 		for (let i = 0; i < 3; i++) {
 			const shortcut = shortcuts[i] ?? { folder: "", icon: "folder-open" };
