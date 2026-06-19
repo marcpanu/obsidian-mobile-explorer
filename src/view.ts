@@ -125,7 +125,7 @@ export class MobileExplorerView extends ItemView {
 
 	private isPathInCurrentFolder(path: string): boolean {
 		const lastSlash = path.lastIndexOf("/");
-		const parentPath = lastSlash === -1 ? "" : path.substring(0, lastSlash);
+		const parentPath = lastSlash === -1 ? "/" : path.substring(0, lastSlash);
 		return parentPath === this.currentFolder.path;
 	}
 
@@ -927,15 +927,16 @@ export class MobileExplorerView extends ItemView {
 		baseName: string,
 		isFolder: boolean
 	): string {
+		const prefix = parentPath && parentPath !== "/" ? parentPath + "/" : "";
 		const ext = isFolder ? "" : ".md";
 		let name = `${baseName}${ext}`;
-		let fullPath = parentPath ? `${parentPath}/${name}` : name;
+		let fullPath = `${prefix}${name}`;
 		let counter = 0;
 
 		while (this.app.vault.getAbstractFileByPath(fullPath)) {
 			counter++;
 			name = `${baseName} ${counter}${ext}`;
-			fullPath = parentPath ? `${parentPath}/${name}` : name;
+			fullPath = `${prefix}${name}`;
 		}
 
 		return fullPath;
