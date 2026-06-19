@@ -62,16 +62,16 @@
 
 .mobile-explorer-title-row {
 	display: flex;
-	align-items: flex-end;
-	justify-content: space-between;
-	gap: 8px;
+	align-items: center;
+	gap: 4px;
 }
 
 .mobile-explorer-title {
 	font-size: 28px;
 	font-weight: 700;
 	color: var(--text-normal);
-	flex: 1;
+	flex: 0 1 auto;
+	min-width: 80px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -86,11 +86,21 @@
 	padding-bottom: 4px;
 }
 
+.mobile-explorer-shortcuts {
+	display: flex;
+	flex: 1 1 0;
+	min-width: 0;
+	flex-direction: row-reverse;
+	flex-wrap: wrap;
+	overflow: hidden;
+	max-height: 36px;
+	gap: 2px;
+}
+
 .mobile-explorer-actions {
 	display: flex;
 	gap: 2px;
 	flex-shrink: 0;
-	padding-bottom: 2px;
 }
 
 .mobile-explorer-action-btn {
@@ -286,6 +296,23 @@
 	font-size: 15px;
 }
 
+/* ---- Settings ---- */
+
+.mobile-explorer-icon-preview {
+	display: flex;
+	align-items: center;
+	color: var(--text-muted);
+}
+
+.mobile-explorer-icon-preview svg {
+	width: 18px;
+	height: 18px;
+}
+
+.mobile-explorer-icon-dropdown {
+	max-width: 120px;
+}
+
 /* ---- Desktop compact sizing ---- */
 
 body:not(.is-mobile) .mobile-explorer-header {
@@ -317,8 +344,8 @@ body:not(.is-mobile) .mobile-explorer-subtitle {
 	padding-bottom: 2px;
 }
 
-body:not(.is-mobile) .mobile-explorer-actions {
-	padding-bottom: 0;
+body:not(.is-mobile) .mobile-explorer-shortcuts {
+	max-height: 24px;
 }
 
 body:not(.is-mobile) .mobile-explorer-action-btn {

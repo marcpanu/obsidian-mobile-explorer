@@ -11,10 +11,12 @@ import {
 	setIcon,
 	setTooltip,
 } from "obsidian";
+import type MobileExplorerPlugin from "./main";
 
 export const VIEW_TYPE = "mobile-explorer";
 
 export class MobileExplorerView extends ItemView {
+	private plugin: MobileExplorerPlugin;
 	private currentFolder: TFolder;
 	private folderHistory = new Map<string, string>();
 	private headerEl!: HTMLElement;
@@ -24,19 +26,15 @@ export class MobileExplorerView extends ItemView {
 	private longPressTriggered = false;
 	private refreshTimer: number | null = null;
 
-	// Desktop-only interactions (hover tooltips, multi-select, drag & drop).
 	private readonly isDesktop = Platform.isDesktop;
-	// Multi-selected item paths (desktop, cmd/ctrl+click).
 	private selectedPaths = new Set<string>();
-	// Rendered file/folder item elements by path, for live class updates.
 	private itemEls = new Map<string, HTMLElement>();
-	// Paths being dragged in the current drag operation.
 	private draggedPaths: string[] = [];
-	// Spring-loaded hover timer for navigating while dragging.
 	private springTimer: number | null = null;
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(leaf: WorkspaceLeaf, plugin: MobileExplorerPlugin) {
 		super(leaf);
+		this.plugin = plugin;
 		this.currentFolder = this.app.vault.getRoot();
 	}
 
@@ -78,6 +76,10 @@ export class MobileExplorerView extends ItemView {
 		if (file.parent) {
 			this.setFolder(file.parent, file.path);
 		}
+	}
+
+	onSettingsChanged() {
+		this.renderHeader();
 	}
 
 	// --- Vault events ---
@@ -362,6 +364,9 @@ export class MobileExplorerView extends ItemView {
 			? this.app.vault.getName()
 			: this.currentFolder.name;
 
+		const shortcuts = titleRow.createDiv("mobile-explorer-shortcuts");
+		this.renderShortcutButtons(shortcuts);
+
 		const actions = titleRow.createDiv("mobile-explorer-actions");
 
 		const newFolderBtn = actions.createDiv("mobile-explorer-action-btn");
@@ -383,6 +388,30 @@ export class MobileExplorerView extends ItemView {
 		if (parts.length > 0) {
 			const subtitle = this.headerEl.createDiv("mobile-explorer-subtitle");
 			subtitle.textContent = parts.join(", ");
+		}
+	}
+
+	private renderShortcutButtons(container: HTMLElement) {
+		const root = this.app.vault.getRoot();
+		if (this.currentFolder !== root) {
+			const homeBtn = container.createDiv("mobile-explorer-action-btn");
+			setIcon(homeBtn, "house");
+			homeBtn.addEventListener("click", () => this.setFolder(root));
+		}
+
+		for (const shortcut of this.plugin.settings.shortcuts) {
+			if (!shortcut.folder) continue;
+			const folder = this.app.vault.getAbstractFileByPath(shortcut.folder);
+			if (!(folder instanceof TFolder) || folder === this.currentFolder)
+				continue;
+			const btn = container.createDiv("mobile-explorer-action-btn");
+			setIcon(btn, shortcut.icon || "folder-open");
+			if (this.isDesktop) {
+				setTooltip(btn, folder.name, { placement: "bottom" });
+			}
+			btn.addEventListener("click", () =>
+				this.setFolder(folder as TFolder)
+			);
 		}
 	}
 
