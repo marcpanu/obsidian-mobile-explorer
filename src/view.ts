@@ -31,6 +31,7 @@ export class MobileExplorerView extends ItemView {
 	private itemEls = new Map<string, HTMLElement>();
 	private draggedPaths: string[] = [];
 	private springTimer: number | null = null;
+	private showingRecents = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: MobileExplorerPlugin) {
 		super(leaf);
@@ -154,7 +155,16 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private navigateToParent() {
-		if (!this.currentFolder.parent || this.isAnimating) return;
+		if (this.isAnimating) return;
+		if (this.showingRecents) {
+			this.animateTransition("back", () => {
+				this.showingRecents = false;
+				this.renderHeader();
+				this.renderList();
+			});
+			return;
+		}
+		if (!this.currentFolder.parent) return;
 		const returnTo = this.currentFolder.path;
 		this.animateTransition("back", () => {
 			this.setFolder(this.currentFolder.parent!, returnTo);
@@ -343,15 +353,20 @@ export class MobileExplorerView extends ItemView {
 	private renderHeader() {
 		this.headerEl.empty();
 		const isRoot = !this.currentFolder.parent;
+		const showBack = !isRoot || this.showingRecents;
 
-		if (!isRoot) {
+		if (showBack) {
 			const nav = this.headerEl.createDiv("mobile-explorer-nav");
 			const backIcon = nav.createDiv("mobile-explorer-back-icon");
 			setIcon(backIcon, "chevron-left");
 			const backLabel = nav.createSpan("mobile-explorer-back-label");
-			backLabel.textContent = this.currentFolder.parent?.parent
-				? this.currentFolder.parent.name
-				: this.app.vault.getName();
+			if (this.showingRecents) {
+				backLabel.textContent = this.app.vault.getName();
+			} else {
+				backLabel.textContent = this.currentFolder.parent?.parent
+					? this.currentFolder.parent.name
+					: this.app.vault.getName();
+			}
 			nav.addEventListener("click", () => this.navigateToParent());
 			this.setupDropZone(nav, {
 				springNavigate: () => this.navigateToParent(),
@@ -360,9 +375,13 @@ export class MobileExplorerView extends ItemView {
 
 		const titleRow = this.headerEl.createDiv("mobile-explorer-title-row");
 		const title = titleRow.createDiv("mobile-explorer-title");
-		title.textContent = isRoot
-			? this.app.vault.getName()
-			: this.currentFolder.name;
+		if (this.showingRecents) {
+			title.textContent = "Recents";
+		} else {
+			title.textContent = isRoot
+				? this.app.vault.getName()
+				: this.currentFolder.name;
+		}
 
 		const shortcuts = titleRow.createDiv("mobile-explorer-shortcuts");
 		this.renderShortcutButtons(shortcuts);
@@ -377,17 +396,23 @@ export class MobileExplorerView extends ItemView {
 		setIcon(newNoteBtn, "square-pen");
 		newNoteBtn.addEventListener("click", () => void this.createNewNote());
 
-		const children = this.currentFolder.children;
-		const folders = children.filter((c) => c instanceof TFolder);
-		const files = children.filter((c) => c instanceof TFile);
-		const parts: string[] = [];
-		if (folders.length > 0)
-			parts.push(`${folders.length} folder${folders.length !== 1 ? "s" : ""}`);
-		if (files.length > 0)
-			parts.push(`${files.length} note${files.length !== 1 ? "s" : ""}`);
-		if (parts.length > 0) {
+		if (this.showingRecents) {
+			const allFiles = this.getAllVaultFiles();
 			const subtitle = this.headerEl.createDiv("mobile-explorer-subtitle");
-			subtitle.textContent = parts.join(", ");
+			subtitle.textContent = `${allFiles.length} note${allFiles.length !== 1 ? "s" : ""}`;
+		} else {
+			const children = this.currentFolder.children;
+			const folders = children.filter((c) => c instanceof TFolder);
+			const files = children.filter((c) => c instanceof TFile);
+			const parts: string[] = [];
+			if (folders.length > 0)
+				parts.push(`${folders.length} folder${folders.length !== 1 ? "s" : ""}`);
+			if (files.length > 0)
+				parts.push(`${files.length} note${files.length !== 1 ? "s" : ""}`);
+			if (parts.length > 0) {
+				const subtitle = this.headerEl.createDiv("mobile-explorer-subtitle");
+				subtitle.textContent = parts.join(", ");
+			}
 		}
 	}
 
@@ -411,6 +436,143 @@ export class MobileExplorerView extends ItemView {
 			}
 			btn.addEventListener("click", () => this.setFolder(folder));
 		}
+	}
+
+	// --- Recents ---
+
+	private renderRecentsEntry(target: HTMLElement) {
+		const allFiles = this.getAllVaultFiles();
+		if (allFiles.length === 0) return;
+
+		const section = target.createDiv("mobile-explorer-section");
+		const card = section.createDiv("mobile-explorer-section-card");
+		const item = card.createDiv({
+			cls: "mobile-explorer-item is-folder",
+		});
+		const icon = item.createDiv("mobile-explorer-item-icon");
+		setIcon(icon, "clock");
+		item.createDiv("mobile-explorer-item-content").createDiv({
+			cls: "mobile-explorer-item-name",
+			text: "Recents",
+		});
+		const count = item.createDiv("mobile-explorer-item-count");
+		count.textContent = String(allFiles.length);
+		const chevron = item.createDiv("mobile-explorer-item-chevron");
+		setIcon(chevron, "chevron-right");
+		item.addEventListener("click", () => {
+			if (this.isAnimating) return;
+			this.animateTransition("forward", () => {
+				this.showingRecents = true;
+				this.renderHeader();
+				this.renderList();
+			});
+		});
+	}
+
+	private getAllVaultFiles(): TFile[] {
+		const files: TFile[] = [];
+		const collect = (folder: TFolder) => {
+			for (const child of folder.children) {
+				if (child instanceof TFile) files.push(child);
+				else if (child instanceof TFolder) collect(child);
+			}
+		};
+		collect(this.app.vault.getRoot());
+		return files.sort((a, b) => b.stat.mtime - a.stat.mtime);
+	}
+
+	private renderRecentsInto(target: HTMLElement) {
+		target.empty();
+		const files = this.getAllVaultFiles();
+
+		if (files.length === 0) {
+			target.createDiv({
+				cls: "mobile-explorer-empty",
+				text: "No notes",
+			});
+			return;
+		}
+
+		const groups = this.groupByTimePeriod(files);
+		for (const group of groups) {
+			const section = target.createDiv("mobile-explorer-section");
+			section.createDiv({
+				cls: "mobile-explorer-section-label mobile-explorer-time-group",
+				text: group.label,
+			});
+			const card = section.createDiv("mobile-explorer-section-card");
+			for (const file of group.files) {
+				this.renderRecentFileItem(card, file);
+			}
+		}
+	}
+
+	private renderRecentFileItem(container: HTMLElement, file: TFile) {
+		const item = container.createDiv({
+			cls: "mobile-explorer-item is-file",
+		});
+		const content = item.createDiv("mobile-explorer-item-content");
+		content.createDiv({
+			cls: "mobile-explorer-item-name",
+			text: file.basename,
+		});
+
+		const metaParts: string[] = [];
+		metaParts.push(this.formatDate(file.stat.mtime));
+		const folderName = file.parent?.isRoot()
+			? this.app.vault.getName()
+			: file.parent?.name;
+		if (folderName) metaParts.push(folderName);
+		content.createDiv({
+			cls: "mobile-explorer-item-meta",
+			text: metaParts.join("  ·  "),
+		});
+
+		item.addEventListener("click", () => this.openFile(file));
+		this.addContextMenu(item, file);
+	}
+
+	private groupByTimePeriod(
+		files: TFile[]
+	): { label: string; files: TFile[] }[] {
+		const now = new Date();
+		const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+		const yesterday = new Date(today.getTime() - 86400000);
+		const weekAgo = new Date(today.getTime() - 7 * 86400000);
+		const monthAgo = new Date(today.getTime() - 30 * 86400000);
+
+		const groups: Map<string, { label: string; files: TFile[] }> = new Map();
+
+		const addToGroup = (key: string, label: string, file: TFile) => {
+			let group = groups.get(key);
+			if (!group) {
+				group = { label, files: [] };
+				groups.set(key, group);
+			}
+			group.files.push(file);
+		};
+
+		for (const file of files) {
+			const d = new Date(file.stat.mtime);
+			if (d >= today) {
+				addToGroup("today", "Today", file);
+			} else if (d >= yesterday) {
+				addToGroup("yesterday", "Yesterday", file);
+			} else if (d >= weekAgo) {
+				addToGroup("week", "Previous 7 Days", file);
+			} else if (d >= monthAgo) {
+				addToGroup("month", "Previous 30 Days", file);
+			} else if (d.getFullYear() === now.getFullYear()) {
+				const monthName = d.toLocaleDateString(undefined, {
+					month: "long",
+				});
+				addToGroup(`month-${d.getMonth()}`, monthName, file);
+			} else {
+				addToGroup(`year-${d.getFullYear()}`, String(d.getFullYear()), file);
+			}
+		}
+
+		return [...groups.values()];
 	}
 
 	private formatDate(ts: number): string {
@@ -446,7 +608,11 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private renderList(restorePath?: string) {
-		this.renderFolderInto(this.listEl, this.currentFolder, restorePath);
+		if (this.showingRecents) {
+			this.renderRecentsInto(this.listEl);
+		} else {
+			this.renderFolderInto(this.listEl, this.currentFolder, restorePath);
+		}
 	}
 
 	private renderFolderInto(
@@ -472,6 +638,10 @@ export class MobileExplorerView extends ItemView {
 		const files = children.filter((c) => c instanceof TFile);
 
 		let restoreEl: HTMLElement | null = null;
+
+		if (folder.isRoot()) {
+			this.renderRecentsEntry(target);
+		}
 
 		if (folders.length > 0) {
 			const section = target.createDiv("mobile-explorer-section");
