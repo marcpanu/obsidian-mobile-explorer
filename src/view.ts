@@ -1,5 +1,4 @@
 import {
-	FileManager,
 	ItemView,
 	Menu,
 	Notice,
@@ -897,7 +896,7 @@ export class MobileExplorerView extends ItemView {
 				.setIcon("lucide-pencil")
 				.setSection("danger")
 				.onClick(() => {
-					(this.app.fileManager as FileManager & { promptForFileRename(file: TAbstractFile): void }).promptForFileRename(file);
+					this.startInlineRename(file);
 				})
 		);
 		menu.addItem((item) => {
@@ -917,6 +916,64 @@ export class MobileExplorerView extends ItemView {
 		this.app.workspace.trigger("file-menu", menu, file, "file-explorer-context-menu");
 
 		menu.showAtPosition({ x, y });
+	}
+
+	private startInlineRename(file: TAbstractFile) {
+		const el = this.itemEls.get(file.path);
+		if (!el) return;
+		const nameEl = el.querySelector<HTMLElement>(".mobile-explorer-item-name");
+		if (!nameEl) return;
+
+		const isFile = file instanceof TFile;
+		const originalName = isFile ? file.basename : file.name;
+
+		const input = activeDocument.createElement("input");
+		input.type = "text";
+		input.value = originalName;
+		input.addClass("mobile-explorer-inline-rename");
+		nameEl.replaceWith(input);
+		input.focus();
+		input.select();
+
+		let committed = false;
+		const commit = async () => {
+			if (committed) return;
+			committed = true;
+
+			const newName = input.value.trim();
+
+			if (!newName || newName === originalName) {
+				input.replaceWith(nameEl);
+				nameEl.textContent = originalName;
+				return;
+			}
+
+			const parentPath = file.parent?.path ?? "/";
+			const prefix =
+				parentPath && parentPath !== "/" ? parentPath + "/" : "";
+			const ext = isFile ? "." + file.extension : "";
+			const newPath = `${prefix}${newName}${ext}`;
+
+			try {
+				await this.app.fileManager.renameFile(file, newPath);
+			} catch {
+				new Notice(`Could not rename "${originalName}"`);
+				input.replaceWith(nameEl);
+				nameEl.textContent = originalName;
+			}
+		};
+
+		input.addEventListener("keydown", (e) => {
+			if (e.key === "Enter") {
+				e.preventDefault();
+				void commit();
+			} else if (e.key === "Escape") {
+				committed = true;
+				input.replaceWith(nameEl);
+				nameEl.textContent = originalName;
+			}
+		});
+		input.addEventListener("blur", () => void commit());
 	}
 
 	private async duplicateFile(file: TFile) {

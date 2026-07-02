@@ -283,6 +283,19 @@
 	height: 14px;
 }
 
+.mobile-explorer-inline-rename {
+	font-size: 16px;
+	color: var(--text-normal);
+	background: transparent;
+	border: 2px solid var(--interactive-accent);
+	border-radius: 4px;
+	padding: 2px 4px;
+	width: 100%;
+	outline: none;
+	line-height: 1.3;
+	font-family: inherit;
+}
+
 .mobile-explorer-item-badge {
 	font-size: 10px;
 	font-weight: 600;
