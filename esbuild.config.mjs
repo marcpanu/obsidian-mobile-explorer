@@ -17,6 +17,11 @@ const context = await esbuild.context({
 	external: [
 		"obsidian",
 		"electron",
+		// Optional jsPDF companions, lazily required only by its html()/svg
+		// APIs, which this plugin never calls.
+		"canvg",
+		"html2canvas",
+		"dompurify",
 		"@codemirror/autocomplete",
 		"@codemirror/collab",
 		"@codemirror/commands",

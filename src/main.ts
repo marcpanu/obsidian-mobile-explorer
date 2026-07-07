@@ -1,5 +1,15 @@
-import { Plugin, PluginSettingTab, Setting, TFolder, Vault, setIcon } from "obsidian";
+import {
+	Notice,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	TFile,
+	TFolder,
+	Vault,
+	setIcon,
+} from "obsidian";
 import { MobileExplorerView, VIEW_TYPE } from "./view";
+import { printNote } from "./print";
 
 interface Shortcut {
 	folder: string;
@@ -63,6 +73,33 @@ export default class MobileExplorerPlugin extends Plugin {
 			callback: () => this.revealActiveFile(),
 		});
 
+		this.addCommand({
+			id: "print-note",
+			name: "Print current note",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md") return false;
+				if (!checking) this.printNoteSafely(file);
+				return true;
+			},
+		});
+
+		// Adds "Print note" to every file menu: this plugin's long-press /
+		// right-click menu (which triggers "file-menu") as well as Obsidian's
+		// own file menus.
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, file) => {
+				if (!(file instanceof TFile) || file.extension !== "md") return;
+				menu.addItem((item) =>
+					item
+						.setTitle("Print note")
+						.setIcon("lucide-printer")
+						.setSection("action")
+						.onClick(() => this.printNoteSafely(file))
+				);
+			})
+		);
+
 		this.app.workspace.onLayoutReady(() => this.activateView());
 	}
 
@@ -77,6 +114,13 @@ export default class MobileExplorerPlugin extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 		this.refreshViews();
+	}
+
+	private printNoteSafely(file: TFile) {
+		printNote(this.app, file).catch((error: unknown) => {
+			console.error("Mobile Explorer: printing failed", error);
+			new Notice(`Could not print "${file.basename}"`);
+		});
 	}
 
 	private refreshViews() {
