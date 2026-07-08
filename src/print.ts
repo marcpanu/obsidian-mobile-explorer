@@ -112,6 +112,7 @@ async function printViaIframe(title: string, host: HTMLElement): Promise<void> {
 	const iwin = iframe.contentWindow;
 	if (!idoc || !iwin) {
 		iframe.remove();
+		new Notice("Could not open the print dialog");
 		return;
 	}
 
@@ -200,7 +201,7 @@ async function shareAsPdf(
 		path = `${dir}${file.basename} ${counter}.pdf`;
 	}
 	const saved = await app.vault.createBinary(path, await blob.arrayBuffer());
-	new Notice(`Saved PDF to "${path}"`);
+	new Notice(`Sharing isn't available — saved PDF to "${path}"`);
 	await app.workspace.getLeaf(false).openFile(saved);
 }
 
