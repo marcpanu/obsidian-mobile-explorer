@@ -30,6 +30,7 @@ export class MobileExplorerView extends ItemView {
 	private itemEls = new Map<string, HTMLElement>();
 	private draggedPaths: string[] = [];
 	private springTimer: number | null = null;
+	private activeDropEl: HTMLElement | null = null;
 	private showingRecents = false;
 
 	constructor(leaf: WorkspaceLeaf, plugin: MobileExplorerPlugin) {
@@ -56,6 +57,21 @@ export class MobileExplorerView extends ItemView {
 		this.headerEl = el.createDiv("mobile-explorer-header");
 		this.wrapperEl = el.createDiv("mobile-explorer-wrapper");
 		this.listEl = this.wrapperEl.createDiv("mobile-explorer-list");
+
+		// Dropping on the list background (not on a folder row) moves the
+		// dragged items into the folder currently being viewed.
+		this.setupDropZone(this.wrapperEl, {
+			canDrop: () =>
+				!this.showingRecents &&
+				this.canDropInto(this.currentFolder) &&
+				this.draggedPaths.some(
+					(p) =>
+						this.app.vault.getAbstractFileByPath(p)?.parent?.path !==
+						this.currentFolder.path
+				),
+			onDrop: () =>
+				void this.moveItemsToFolder(this.draggedPaths, this.currentFolder),
+		});
 
 		this.registerVaultEvents();
 		this.setupSwipeBack();
@@ -1042,6 +1058,8 @@ export class MobileExplorerView extends ItemView {
 			}
 			this.draggedPaths = [];
 			this.clearSpringTimer();
+			this.activeDropEl?.removeClass("is-drop-target");
+			this.activeDropEl = null;
 		});
 	}
 
@@ -1057,7 +1075,13 @@ export class MobileExplorerView extends ItemView {
 			if (this.draggedPaths.length === 0) return;
 			if (opts.canDrop && !opts.canDrop()) return;
 			e.preventDefault();
+			// Innermost drop zone wins (folder rows over the list background).
+			e.stopPropagation();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+			if (this.activeDropEl && this.activeDropEl !== el) {
+				this.activeDropEl.removeClass("is-drop-target");
+			}
+			this.activeDropEl = el;
 			el.addClass("is-drop-target");
 			if (opts.springNavigate && this.springTimer === null) {
 				this.springTimer = window.setTimeout(() => {
@@ -1070,12 +1094,15 @@ export class MobileExplorerView extends ItemView {
 			if (e.relatedTarget instanceof Node && el.contains(e.relatedTarget))
 				return;
 			el.removeClass("is-drop-target");
+			if (this.activeDropEl === el) this.activeDropEl = null;
 			this.clearSpringTimer();
 		});
 		if (opts.onDrop) {
 			el.addEventListener("drop", (e) => {
 				e.preventDefault();
+				e.stopPropagation();
 				el.removeClass("is-drop-target");
+				if (this.activeDropEl === el) this.activeDropEl = null;
 				this.clearSpringTimer();
 				opts.onDrop!();
 			});
