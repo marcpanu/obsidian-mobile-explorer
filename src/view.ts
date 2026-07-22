@@ -14,6 +14,10 @@ import type MobileExplorerPlugin from "./main";
 
 export const VIEW_TYPE = "mobile-explorer";
 
+// History entry marking the Recents view. NUL can never appear in a vault
+// path, so it can't collide with a real folder.
+const RECENTS_LOCATION = "\u0000recents";
+
 export class MobileExplorerView extends ItemView {
 	private plugin: MobileExplorerPlugin;
 	private currentFolder: TFolder;
@@ -32,6 +36,8 @@ export class MobileExplorerView extends ItemView {
 	private springTimer: number | null = null;
 	private activeDropEl: HTMLElement | null = null;
 	private showingRecents = false;
+	private navBackStack: string[] = [];
+	private navForwardStack: string[] = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: MobileExplorerPlugin) {
 		super(leaf);
@@ -75,6 +81,7 @@ export class MobileExplorerView extends ItemView {
 
 		this.registerVaultEvents();
 		this.setupSwipeBack();
+		this.setupMouseNav();
 
 		const active = this.app.workspace.getActiveFile();
 		if (active?.parent) {
@@ -163,16 +170,32 @@ export class MobileExplorerView extends ItemView {
 	// --- Navigation ---
 
 	private setFolder(folder: TFolder, restorePath?: string) {
+		if (this.showingRecents || folder.path !== this.currentFolder.path) {
+			this.recordHistory();
+		}
+		this.showingRecents = false;
 		this.selectedPaths.clear();
 		this.currentFolder = folder;
 		this.renderHeader();
 		this.renderList(restorePath);
 	}
 
+	/** The current location as a history entry. */
+	private currentLocation(): string {
+		return this.showingRecents ? RECENTS_LOCATION : this.currentFolder.path;
+	}
+
+	private recordHistory() {
+		this.navBackStack.push(this.currentLocation());
+		if (this.navBackStack.length > 100) this.navBackStack.shift();
+		this.navForwardStack.length = 0;
+	}
+
 	private navigateToParent() {
 		if (this.isAnimating) return;
 		if (this.showingRecents) {
 			this.animateTransition("back", () => {
+				this.recordHistory();
 				this.showingRecents = false;
 				this.renderHeader();
 				this.renderList();
@@ -195,6 +218,83 @@ export class MobileExplorerView extends ItemView {
 
 	private openFile(file: TFile) {
 		void this.app.workspace.getLeaf(false).openFile(file);
+	}
+
+	// --- Mouse back/forward buttons ---
+
+	private setupMouseNav() {
+		const isNavButton = (e: MouseEvent) => e.button === 3 || e.button === 4;
+		// Capture phase + stopPropagation so Obsidian's own note-history
+		// handling of these buttons doesn't also fire while the pointer is
+		// over the explorer.
+		this.registerDomEvent(
+			this.containerEl,
+			"mousedown",
+			(e) => {
+				if (!isNavButton(e)) return;
+				e.preventDefault();
+				e.stopPropagation();
+			},
+			{ capture: true }
+		);
+		this.registerDomEvent(
+			this.containerEl,
+			"mouseup",
+			(e) => {
+				if (!isNavButton(e)) return;
+				e.preventDefault();
+				e.stopPropagation();
+				if (e.button === 3) this.goBack();
+				else this.goForward();
+			},
+			{ capture: true }
+		);
+	}
+
+	private goBack() {
+		if (this.isAnimating) return;
+		while (this.navBackStack.length > 0) {
+			const target = this.resolveLocation(this.navBackStack.pop()!);
+			if (!target) continue; // deleted or renamed since it was visited
+			this.navForwardStack.push(this.currentLocation());
+			this.applyLocation(target, "back");
+			return;
+		}
+		// No history to return to — fall back to going up a level.
+		this.navigateToParent();
+	}
+
+	private goForward() {
+		if (this.isAnimating) return;
+		while (this.navForwardStack.length > 0) {
+			const target = this.resolveLocation(this.navForwardStack.pop()!);
+			if (!target) continue;
+			this.navBackStack.push(this.currentLocation());
+			this.applyLocation(target, "forward");
+			return;
+		}
+	}
+
+	private resolveLocation(entry: string): TFolder | "recents" | null {
+		if (entry === RECENTS_LOCATION) return "recents";
+		const f = this.app.vault.getAbstractFileByPath(entry);
+		return f instanceof TFolder ? f : null;
+	}
+
+	/** Navigate to a history entry without recording it as a new step. */
+	private applyLocation(target: TFolder | "recents", direction: "forward" | "back") {
+		const cameFrom = this.showingRecents ? undefined : this.currentFolder.path;
+		this.animateTransition(direction, () => {
+			this.selectedPaths.clear();
+			if (target === "recents") {
+				this.showingRecents = true;
+			} else {
+				this.showingRecents = false;
+				this.currentFolder = target;
+			}
+			this.renderHeader();
+			this.renderList(direction === "back" ? cameFrom : undefined);
+		});
 	}
 
 	// --- Animation ---
@@ -336,6 +436,7 @@ export class MobileExplorerView extends ItemView {
 					outgoing.remove();
 					incoming.setCssStyles({ transition: "" });
 					this.listEl = incoming;
+					this.recordHistory();
 					this.currentFolder = parent;
 					this.renderHeader();
 					this.isAnimating = false;
@@ -477,6 +578,7 @@ export class MobileExplorerView extends ItemView {
 		item.addEventListener("click", () => {
 			if (this.isAnimating) return;
 			this.animateTransition("forward", () => {
+				this.recordHistory();
 				this.showingRecents = true;
 				this.renderHeader();
 				this.renderList();
