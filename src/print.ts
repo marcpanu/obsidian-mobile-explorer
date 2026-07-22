@@ -2,8 +2,10 @@ import {
 	App,
 	Component,
 	MarkdownRenderer,
+	Modal,
 	Notice,
 	Platform,
+	Setting,
 	TFile,
 	arrayBufferToBase64,
 } from "obsidian";
@@ -187,11 +189,24 @@ async function shareAsPdf(
 		} catch (e) {
 			// The user closing the share sheet is not an error.
 			if (e instanceof Error && e.name === "AbortError") return;
+			// Anything else is most likely the user-activation window
+			// expiring while the PDF was generated (large notes). Re-offer
+			// the share from a fresh tap, where activation can't expire.
+			new SharePdfModal(app, file, pdfFile, blob).open();
+			return;
 		}
 	}
 
-	// Fallback (e.g. webviews without the Web Share API): save the PDF into
-	// the vault next to the note and open it.
+	await savePdfToVault(app, file, blob);
+}
+
+// Fallback (e.g. webviews without the Web Share API): save the PDF into
+// the vault next to the note and open it.
+async function savePdfToVault(
+	app: App,
+	file: TFile,
+	blob: Blob
+): Promise<void> {
 	const dir =
 		file.parent && file.parent.path !== "/" ? file.parent.path + "/" : "";
 	let path = `${dir}${file.basename}.pdf`;
@@ -201,8 +216,60 @@ async function shareAsPdf(
 		path = `${dir}${file.basename} ${counter}.pdf`;
 	}
 	const saved = await app.vault.createBinary(path, await blob.arrayBuffer());
-	new Notice(`Sharing isn't available — saved PDF to "${path}"`);
+	new Notice(`Saved PDF to "${path}"`);
 	await app.workspace.getLeaf(false).openFile(saved);
+}
+
+// Shown when the automatic share failed. The Share button calls
+// navigator.share() synchronously inside the tap handler, so the user
+// activation is always fresh no matter how long the PDF took to generate.
+class SharePdfModal extends Modal {
+	constructor(
+		app: App,
+		private file: TFile,
+		private pdfFile: File,
+		private blob: Blob
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		this.setTitle("PDF ready");
+		this.contentEl.createEl("p", {
+			text: "The share sheet couldn't open automatically. Share the PDF now, or save it to the vault.",
+		});
+		new Setting(this.contentEl)
+			.addButton((btn) =>
+				btn
+					.setButtonText("Share…")
+					.setCta()
+					.onClick(() => {
+						const sharing = navigator.share({
+							files: [this.pdfFile],
+							title: this.file.basename,
+						});
+						this.close();
+						sharing.catch((e: unknown) => {
+							if (e instanceof Error && e.name === "AbortError") return;
+							savePdfToVault(this.app, this.file, this.blob).catch(() => {
+								new Notice("Could not share or save the PDF");
+							});
+						});
+					})
+			)
+			.addButton((btn) =>
+				btn.setButtonText("Save to vault").onClick(() => {
+					this.close();
+					savePdfToVault(this.app, this.file, this.blob).catch(() => {
+						new Notice("Could not save the PDF");
+					});
+				})
+			);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
 }
 
 // --- PDF layout ---
@@ -869,30 +936,44 @@ export class NoteRenderer {
 				return w.wrap(spans, colW - 2 * pad, size);
 			});
 			const nLines = Math.max(1, ...cellLines.map((l) => l.length));
-			const rowH = nLines * lineHeight + 2 * pad;
-			w.ensureRoom(rowH);
-			if (isHeader) {
-				w.doc.setFillColor(240, 240, 240);
-				w.doc.rect(x0, w.y, colW * ncols, rowH, "F");
-			}
-			w.doc.setDrawColor(180, 180, 180);
-			w.doc.setLineWidth(0.5);
-			for (let i = 0; i < cells.length; i++) {
-				w.doc.rect(x0 + i * colW, w.y, colW, rowH, "S");
-				let ly = w.y + pad;
-				for (const line of cellLines[i]) {
-					w.drawLineAt(
-						line,
-						x0 + i * colW + pad,
-						ly,
-						size,
-						lineHeight,
-						TEXT_COLOR
-					);
-					ly += lineHeight;
+			w.ensureRoom(Math.min(nLines, 2) * lineHeight + 2 * pad);
+
+			// Draw the row in segments so a row taller than the remaining
+			// page space continues on the next page instead of clipping.
+			let offset = 0;
+			while (offset < nLines) {
+				let fit = Math.floor((w.maxY - w.y - 2 * pad) / lineHeight);
+				if (fit < 1 && w.y > w.margin) {
+					w.doc.addPage();
+					w.y = w.margin;
+					fit = Math.floor((w.maxY - w.y - 2 * pad) / lineHeight);
 				}
+				const count = Math.min(Math.max(1, fit), nLines - offset);
+				const segH = count * lineHeight + 2 * pad;
+				if (isHeader) {
+					w.doc.setFillColor(240, 240, 240);
+					w.doc.rect(x0, w.y, colW * ncols, segH, "F");
+				}
+				w.doc.setDrawColor(180, 180, 180);
+				w.doc.setLineWidth(0.5);
+				for (let i = 0; i < cells.length; i++) {
+					w.doc.rect(x0 + i * colW, w.y, colW, segH, "S");
+					let ly = w.y + pad;
+					for (const line of cellLines[i].slice(offset, offset + count)) {
+						w.drawLineAt(
+							line,
+							x0 + i * colW + pad,
+							ly,
+							size,
+							lineHeight,
+							TEXT_COLOR
+						);
+						ly += lineHeight;
+					}
+				}
+				w.y += segH;
+				offset += count;
 			}
-			w.y += rowH;
 		}
 		w.space(8);
 	}
