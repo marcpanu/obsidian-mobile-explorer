@@ -23,6 +23,7 @@ Desktop
 - **Swipe-back gesture** — swipe right to navigate to the parent folder on mobile
 - **Slide animations** — iOS-style push/pop transitions between folders
 - **Responsive sizing** — compact layout on desktop, touch-optimized on mobile
+- **Per-device home folder** — pick which folder the explorer treats as its top level on each device (for example `Work` on a work machine, the vault root on a personal one). The Home button, Recents, and the back button all follow it. Defaults to the vault root
 
 ## Installation
 
@@ -38,6 +39,11 @@ Search for "Mobile Explorer" in Settings > Community plugins > Browse.
 ### Manual
 
 Copy `main.js`, `manifest.json`, and `styles.css` into your vault at `.obsidian/plugins/mobile-explorer/`.
+
+## Settings
+
+- **Home folder** — the folder the explorer opens to and treats as its top level: the Home button jumps there, the Recents entry (and the files it lists) is scoped to it, and the back button and swipe-back stop there. It is saved on the current device only (not in the synced plugin settings), so a vault shared across devices can have a different home on each one. Leave it at **Vault root** for the default behaviour. If the folder is renamed the setting follows it; if it is deleted the explorer falls back to the vault root.
+- **Shortcut buttons** — up to three folder shortcuts shown in the header bar, each with its own icon.
 
 ## Printing
 

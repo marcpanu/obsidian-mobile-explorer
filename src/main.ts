@@ -24,6 +24,10 @@ const DEFAULT_SETTINGS: MobileExplorerSettings = {
 	shortcuts: [],
 };
 
+// The home folder is stored per device (in localStorage, not data.json) so
+// each device can treat a different folder as the top of the explorer.
+const HOME_FOLDER_KEY = "home-folder";
+
 const SHORTCUT_ICONS = [
 	"folder-open",
 	"inbox",
@@ -100,7 +104,56 @@ export default class MobileExplorerPlugin extends Plugin {
 			})
 		);
 
+		// Keep the device-local home folder pointing at the right place when
+		// it (or one of its ancestors) is renamed or moved.
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (!(file instanceof TFolder)) return;
+				const home = this.getHomeFolderPath();
+				if (!home) return;
+				if (home === oldPath) {
+					this.setHomeFolderPath(file.path, false);
+				} else if (home.startsWith(oldPath + "/")) {
+					this.setHomeFolderPath(
+						file.path + home.slice(oldPath.length),
+						false
+					);
+				}
+			})
+		);
+
 		this.app.workspace.onLayoutReady(() => this.activateView());
+	}
+
+	/**
+	 * The configured home folder path for this device, or "" when unset
+	 * (meaning the vault root).
+	 */
+	getHomeFolderPath(): string {
+		const value: unknown = this.app.loadLocalStorage(HOME_FOLDER_KEY);
+		return typeof value === "string" ? value : "";
+	}
+
+	/**
+	 * Set the home folder for this device. Pass "" to use the vault root.
+	 */
+	setHomeFolderPath(path: string, navigate = true) {
+		this.app.saveLocalStorage(HOME_FOLDER_KEY, path || null);
+		for (const view of this.getViews()) view.onHomeChanged(navigate);
+	}
+
+	/**
+	 * The folder the explorer treats as its top level. Falls back to the
+	 * vault root when nothing is configured or the configured folder no
+	 * longer exists.
+	 */
+	getHomeFolder(): TFolder {
+		const path = this.getHomeFolderPath();
+		if (path) {
+			const folder = this.app.vault.getAbstractFileByPath(path);
+			if (folder instanceof TFolder) return folder;
+		}
+		return this.app.vault.getRoot();
 	}
 
 	async loadSettings() {
@@ -124,9 +177,15 @@ export default class MobileExplorerPlugin extends Plugin {
 	}
 
 	private refreshViews() {
-		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-			(leaf.view as MobileExplorerView).onSettingsChanged();
-		}
+		for (const view of this.getViews()) view.onSettingsChanged();
+	}
+
+	/** Open explorer views, skipping leaves that are still deferred. */
+	private getViews(): MobileExplorerView[] {
+		return this.app.workspace
+			.getLeavesOfType(VIEW_TYPE)
+			.map((leaf) => leaf.view)
+			.filter((v): v is MobileExplorerView => v instanceof MobileExplorerView);
 	}
 
 	private async activateView() {
@@ -179,6 +238,29 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 
 		const folders = this.getAllFolders(this.plugin.app.vault);
 		const shortcuts = this.plugin.settings.shortcuts;
+
+		new Setting(containerEl)
+			.setName("Home folder")
+			.setDesc(
+				"The folder the explorer treats as its top level: where it " +
+					"opens, where the Home button goes, and where Recents " +
+					"appears. Recents and the back button are limited to this " +
+					"folder. Saved on this device only, so each device can " +
+					"have its own home folder."
+			)
+			.addDropdown((dropdown) => {
+				dropdown.addOption("", "Vault root");
+				const current = this.plugin.getHomeFolderPath();
+				if (current && !folders.includes(current)) {
+					dropdown.addOption(current, `${current} (missing)`);
+				}
+				for (const path of folders) {
+					dropdown.addOption(path, path);
+				}
+				dropdown.setValue(current).onChange((value) => {
+					this.plugin.setHomeFolderPath(value);
+				});
+			});
 
 		new Setting(containerEl)
 			.setName("Shortcut buttons")
