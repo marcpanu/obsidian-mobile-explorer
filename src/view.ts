@@ -14,6 +14,11 @@ import type MobileExplorerPlugin from "./main";
 
 export const VIEW_TYPE = "mobile-explorer";
 
+/** Whether `path` is `ancestor` itself or lies somewhere beneath it. */
+export function isPathAtOrUnder(path: string, ancestor: string): boolean {
+	return path === ancestor || path.startsWith(ancestor + "/");
+}
+
 // History entry marking the Recents view. NUL can never appear in a vault
 // path, so it can't collide with a real folder.
 const RECENTS_LOCATION = "\u0000recents";
@@ -42,7 +47,31 @@ export class MobileExplorerView extends ItemView {
 	constructor(leaf: WorkspaceLeaf, plugin: MobileExplorerPlugin) {
 		super(leaf);
 		this.plugin = plugin;
-		this.currentFolder = this.app.vault.getRoot();
+		this.currentFolder = this.home;
+	}
+
+	/** The folder this device treats as the top of the explorer. */
+	private get home(): TFolder {
+		return this.plugin.getHomeFolder();
+	}
+
+	private isHome(folder: TFolder): boolean {
+		return folder.path === this.home.path;
+	}
+
+	/**
+	 * The folder the back button / swipe-back leads to, or null when there
+	 * is nowhere to go up to. Navigation stops at the home folder (and at
+	 * the vault root for folders outside the home subtree).
+	 */
+	private parentForNav(): TFolder | null {
+		if (this.isHome(this.currentFolder)) return null;
+		return this.currentFolder.parent;
+	}
+
+	/** Display name for a folder: the vault name for the root. */
+	private locationName(folder: TFolder): string {
+		return folder.isRoot() ? this.app.vault.getName() : folder.name;
 	}
 
 	getViewType() {
@@ -83,12 +112,17 @@ export class MobileExplorerView extends ItemView {
 		this.setupSwipeBack();
 		this.setupMouseNav();
 
-		const active = this.app.workspace.getActiveFile();
-		if (active?.parent) {
-			this.setFolder(active.parent, active.path);
-		} else {
-			this.setFolder(this.app.vault.getRoot());
-		}
+		// The vault index may still be loading when a restored leaf opens
+		// (notably on mobile); resolving home before then falls back to the
+		// vault root. Wait for the index so the configured home is honoured.
+		this.app.workspace.onLayoutReady(() => {
+			const active = this.app.workspace.getActiveFile();
+			if (active?.parent) {
+				this.setFolder(active.parent, active.path);
+			} else {
+				this.setFolder(this.home);
+			}
+		});
 	}
 
 	async onClose() {
@@ -105,6 +139,21 @@ export class MobileExplorerView extends ItemView {
 		this.renderHeader();
 	}
 
+	/**
+	 * The device's home folder changed. Jump to the new home, or, when home
+	 * merely moved or appeared/disappeared, redraw in place. The list only
+	 * depends on home for its Recents entry, so that redraw goes through the
+	 * debounce and coalesces with the refresh the vault event itself causes.
+	 */
+	onHomeChanged(navigate: boolean) {
+		if (navigate) {
+			this.setFolder(this.home);
+		} else {
+			this.renderHeader();
+			this.debouncedRefresh();
+		}
+	}
+
 	// --- Vault events ---
 
 	private registerVaultEvents() {
@@ -116,9 +165,9 @@ export class MobileExplorerView extends ItemView {
 		this.registerEvent(
 			this.app.vault.on("delete", (file) => {
 				// If the current folder (or one of its ancestors) was deleted,
-				// fall back to the root so we're not showing a defunct folder.
+				// fall back to home so we're not showing a defunct folder.
 				if (this.isCurrentFolderAtOrUnder(file.path)) {
-					this.setFolder(this.app.vault.getRoot());
+					this.setFolder(this.home);
 					return;
 				}
 				// Note: Obsidian nulls file.parent before firing "delete", so the
@@ -153,10 +202,7 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private isCurrentFolderAtOrUnder(path: string): boolean {
-		return (
-			this.currentFolder.path === path ||
-			this.currentFolder.path.startsWith(path + "/")
-		);
+		return isPathAtOrUnder(this.currentFolder.path, path);
 	}
 
 	private debouncedRefresh() {
@@ -202,10 +248,11 @@ export class MobileExplorerView extends ItemView {
 			});
 			return;
 		}
-		if (!this.currentFolder.parent) return;
+		const parent = this.parentForNav();
+		if (!parent) return;
 		const returnTo = this.currentFolder.path;
 		this.animateTransition("back", () => {
-			this.setFolder(this.currentFolder.parent!, returnTo);
+			this.setFolder(parent, returnTo);
 		});
 	}
 
@@ -353,7 +400,7 @@ export class MobileExplorerView extends ItemView {
 		let width = 1;
 
 		this.wrapperEl.addEventListener("touchstart", (e) => {
-			if (!this.currentFolder.parent || this.isAnimating) {
+			if (!this.parentForNav() || this.isAnimating) {
 				tracking = false;
 				return;
 			}
@@ -379,7 +426,7 @@ export class MobileExplorerView extends ItemView {
 				}
 				if (axis !== "horizontal") return;
 
-				const parent = this.currentFolder.parent;
+				const parent = this.parentForNav();
 				if (!parent) return;
 
 				// Engage only on a rightward drag; a leftward horizontal swipe is
@@ -417,7 +464,7 @@ export class MobileExplorerView extends ItemView {
 			const incoming = prevList;
 			prevList = null;
 			const outgoing = this.listEl;
-			const parent = this.currentFolder.parent;
+			const parent = this.parentForNav();
 
 			const touch = e.changedTouches[0];
 			const dx = touch ? touch.clientX - startX : 0;
@@ -468,21 +515,17 @@ export class MobileExplorerView extends ItemView {
 
 	private renderHeader() {
 		this.headerEl.empty();
-		const isRoot = !this.currentFolder.parent;
-		const showBack = !isRoot || this.showingRecents;
+		// Leaving Recents returns to the folder it was opened from.
+		const backTarget = this.showingRecents
+			? this.currentFolder
+			: this.parentForNav();
 
-		if (showBack) {
+		if (backTarget) {
 			const nav = this.headerEl.createDiv("mobile-explorer-nav");
 			const backIcon = nav.createDiv("mobile-explorer-back-icon");
 			setIcon(backIcon, "chevron-left");
 			const backLabel = nav.createSpan("mobile-explorer-back-label");
-			if (this.showingRecents) {
-				backLabel.textContent = this.app.vault.getName();
-			} else {
-				backLabel.textContent = this.currentFolder.parent?.parent
-					? this.currentFolder.parent.name
-					: this.app.vault.getName();
-			}
+			backLabel.textContent = this.locationName(backTarget);
 			nav.addEventListener("click", () => this.navigateToParent());
 			this.setupDropZone(nav, {
 				springNavigate: () => this.navigateToParent(),
@@ -494,9 +537,7 @@ export class MobileExplorerView extends ItemView {
 		if (this.showingRecents) {
 			title.textContent = "Recents";
 		} else {
-			title.textContent = isRoot
-				? this.app.vault.getName()
-				: this.currentFolder.name;
+			title.textContent = this.locationName(this.currentFolder);
 		}
 
 		const shortcuts = titleRow.createDiv("mobile-explorer-shortcuts");
@@ -533,11 +574,15 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private renderShortcutButtons(container: HTMLElement) {
-		const root = this.app.vault.getRoot();
-		if (this.currentFolder !== root) {
+		if (!this.isHome(this.currentFolder)) {
 			const homeBtn = container.createDiv("mobile-explorer-action-btn");
 			setIcon(homeBtn, "house");
-			homeBtn.addEventListener("click", () => this.setFolder(root));
+			if (this.isDesktop) {
+				setTooltip(homeBtn, this.locationName(this.home), {
+					placement: "bottom",
+				});
+			}
+			homeBtn.addEventListener("click", () => this.setFolder(this.home));
 		}
 
 		for (const shortcut of this.plugin.settings.shortcuts) {
@@ -586,6 +631,7 @@ export class MobileExplorerView extends ItemView {
 		});
 	}
 
+	/** Every file under the home folder, most recently modified first. */
 	private getAllVaultFiles(): TFile[] {
 		const files: TFile[] = [];
 		const collect = (folder: TFolder) => {
@@ -594,7 +640,7 @@ export class MobileExplorerView extends ItemView {
 				else if (child instanceof TFolder) collect(child);
 			}
 		};
-		collect(this.app.vault.getRoot());
+		collect(this.home);
 		return files.sort((a, b) => b.stat.mtime - a.stat.mtime);
 	}
 
@@ -636,10 +682,7 @@ export class MobileExplorerView extends ItemView {
 
 		const metaParts: string[] = [];
 		metaParts.push(this.formatDate(file.stat.mtime));
-		const folderName = file.parent?.isRoot()
-			? this.app.vault.getName()
-			: file.parent?.name;
-		if (folderName) metaParts.push(folderName);
+		if (file.parent) metaParts.push(this.locationName(file.parent));
 		content.createDiv({
 			cls: "mobile-explorer-item-meta",
 			text: metaParts.join("  ·  "),
@@ -756,7 +799,7 @@ export class MobileExplorerView extends ItemView {
 
 		let restoreEl: HTMLElement | null = null;
 
-		if (folder.isRoot()) {
+		if (this.isHome(folder)) {
 			this.renderRecentsEntry(target);
 		}
 
