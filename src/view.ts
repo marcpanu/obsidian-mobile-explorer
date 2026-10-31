@@ -28,6 +28,13 @@ export class MobileExplorerView extends ItemView {
 	private isAnimating = false;
 	private longPressTriggered = false;
 	private refreshTimer: number | null = null;
+	// While an inline rename input is on screen, list re-renders are held
+	// back so they don't replace the input mid-edit; the refresh runs once
+	// the rename finishes. The input element is the source of truth: if a
+	// swipe or navigation rebuilt the list underneath it, it is no longer
+	// connected and the guard lifts on its own.
+	private renameInput: HTMLInputElement | null = null;
+	private refreshDeferred = false;
 
 	private readonly isDesktop = Platform.isDesktop;
 	private selectedPaths = new Set<string>();
@@ -92,7 +99,7 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	async onClose() {
-		if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+		this.cancelPendingRefresh();
 	}
 
 	revealFile(file: TFile) {
@@ -159,8 +166,31 @@ export class MobileExplorerView extends ItemView {
 		);
 	}
 
+	private cancelPendingRefresh() {
+		if (this.refreshTimer !== null) {
+			window.clearTimeout(this.refreshTimer);
+			this.refreshTimer = null;
+		}
+	}
+
+	/** True while an inline rename input is live in the list. */
+	private isRenaming(): boolean {
+		if (this.renameInput === null) return false;
+		if (this.renameInput.isConnected) return true;
+		// The input was torn down by a re-render that bypassed the rename's
+		// own finish (swipe-back, delete handler, history navigation). The
+		// list was rebuilt anyway, so no refresh is owed.
+		this.renameInput = null;
+		this.refreshDeferred = false;
+		return false;
+	}
+
 	private debouncedRefresh() {
-		if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+		if (this.isRenaming()) {
+			this.refreshDeferred = true;
+			return;
+		}
+		this.cancelPendingRefresh();
 		this.refreshTimer = window.setTimeout(() => {
 			this.refreshTimer = null;
 			this.renderList();
@@ -506,7 +536,9 @@ export class MobileExplorerView extends ItemView {
 
 		const newFolderBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newFolderBtn, "folder-plus");
-		newFolderBtn.addEventListener("click", () => void this.createNewFolder());
+		newFolderBtn.addEventListener("click", () =>
+			void this.createNewFolder(this.currentFolder)
+		);
 
 		const newNoteBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newNoteBtn, "square-pen");
@@ -1000,10 +1032,7 @@ export class MobileExplorerView extends ItemView {
 					.setTitle("New folder")
 					.setIcon("lucide-folder-plus")
 					.setSection("action")
-					.onClick(async () => {
-						const path = this.getUniquePath(file.path, "New folder", true);
-						await this.app.vault.createFolder(path);
-					})
+					.onClick(() => void this.createNewFolder(file))
 			);
 			menu.addSeparator();
 		}
@@ -1037,6 +1066,9 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private startInlineRename(file: TAbstractFile) {
+		// One rename at a time: a second input would be destroyed when the
+		// first one finishes and flushes its deferred refresh.
+		if (this.isRenaming()) return;
 		const el = this.itemEls.get(file.path);
 		if (!el) return;
 		const nameEl = el.querySelector<HTMLElement>(".mobile-explorer-item-name");
@@ -1049,9 +1081,37 @@ export class MobileExplorerView extends ItemView {
 		input.type = "text";
 		input.value = originalName;
 		input.addClass("mobile-explorer-inline-rename");
+		// Clicks inside the input must not activate the row (which would
+		// navigate into a folder or open a note), and text selection by mouse
+		// must not start a row drag.
+		input.addEventListener("click", (e) => e.stopPropagation());
+		input.addEventListener("dblclick", (e) => e.stopPropagation());
+		const wasDraggable = el.draggable;
+		el.draggable = false;
 		nameEl.replaceWith(input);
 		input.focus();
 		input.select();
+
+		// A refresh that is already scheduled would rebuild the list and
+		// destroy the input; hold it until the rename finishes instead.
+		if (this.refreshTimer !== null) {
+			this.cancelPendingRefresh();
+			this.refreshDeferred = true;
+		}
+		this.renameInput = input;
+		const finish = () => {
+			el.draggable = wasDraggable;
+			if (this.renameInput === input) this.renameInput = null;
+			if (this.refreshDeferred) {
+				this.refreshDeferred = false;
+				this.debouncedRefresh();
+			}
+		};
+		const revert = () => {
+			input.replaceWith(nameEl);
+			nameEl.textContent = originalName;
+			finish();
+		};
 
 		let committed = false;
 		const commit = async () => {
@@ -1061,8 +1121,7 @@ export class MobileExplorerView extends ItemView {
 			const newName = input.value.trim();
 
 			if (!newName || newName === originalName) {
-				input.replaceWith(nameEl);
-				nameEl.textContent = originalName;
+				revert();
 				return;
 			}
 
@@ -1074,10 +1133,15 @@ export class MobileExplorerView extends ItemView {
 
 			try {
 				await this.app.fileManager.renameFile(file, newPath);
+				// Show the new name right away rather than waiting on the
+				// rename event's refresh: in Recents the renamed file may not
+				// be under the current folder, so that refresh never comes.
+				input.replaceWith(nameEl);
+				nameEl.textContent = newName;
+				finish();
 			} catch {
 				new Notice(`Could not rename "${originalName}"`);
-				input.replaceWith(nameEl);
-				nameEl.textContent = originalName;
+				revert();
 			}
 		};
 
@@ -1087,8 +1151,7 @@ export class MobileExplorerView extends ItemView {
 				void commit();
 			} else if (e.key === "Escape") {
 				committed = true;
-				input.replaceWith(nameEl);
-				nameEl.textContent = originalName;
+				revert();
 			}
 		});
 		input.addEventListener("blur", () => void commit());
@@ -1269,13 +1332,24 @@ export class MobileExplorerView extends ItemView {
 		this.openFile(file);
 	}
 
-	private async createNewFolder() {
-		const path = this.getUniquePath(
-			this.currentFolder.path,
-			"New folder",
-			true
-		);
-		await this.app.vault.createFolder(path);
+	/**
+	 * Create a folder inside `parent` and immediately put its row into inline
+	 * rename mode, so the user can type the name without a second step.
+	 */
+	private async createNewFolder(parent: TFolder) {
+		if (this.isAnimating || this.isRenaming()) return;
+		const path = this.getUniquePath(parent.path, "New folder", true);
+		const folder = await this.app.vault.createFolder(path);
+		// A swipe may have started during the await; rendering into a list
+		// that is mid-transition would corrupt navigation state.
+		if (this.isAnimating) return;
+
+		// Make sure the new row is on screen now rather than after the
+		// debounced vault-event refresh. setFolder only records history when
+		// the location actually changes, so when the parent is already the
+		// folder being shown this is just a re-render.
+		this.setFolder(parent, folder.path);
+		this.startInlineRename(folder);
 	}
 
 	private getUniquePath(
