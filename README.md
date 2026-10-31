@@ -42,7 +42,7 @@ Copy `main.js`, `manifest.json`, and `styles.css` into your vault at `.obsidian/
 
 ## Settings
 
-- **Home folder** — the folder the explorer opens to and treats as its top level: the Home button jumps there, the Recents entry (and the files it lists) is scoped to it, and the back button and swipe-back stop there. It is saved on the current device only (not in the synced plugin settings), so a vault shared across devices can have a different home on each one. Leave it at **Vault root** for the default behaviour. If the folder is renamed the setting follows it; if it is deleted the explorer falls back to the vault root.
+- **Home folder** — the folder the explorer opens to and treats as its top level: the Home button jumps there, the Recents entry (and the files it lists) is scoped to it, and the back button and swipe-back stop there. Folders outside the home folder (reached via a shortcut or "Reveal active file") can still be navigated up to the vault root. It is saved on the current device only (not in the synced plugin settings), so a vault shared across devices can have a different home on each one. Leave it at **Vault root** for the default behaviour. If the folder is renamed the setting follows it; if it is deleted the explorer falls back to the vault root.
 - **Shortcut buttons** — up to three folder shortcuts shown in the header bar, each with its own icon.
 
 ## Printing

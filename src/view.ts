@@ -14,6 +14,11 @@ import type MobileExplorerPlugin from "./main";
 
 export const VIEW_TYPE = "mobile-explorer";
 
+/** Whether `path` is `ancestor` itself or lies somewhere beneath it. */
+export function isPathAtOrUnder(path: string, ancestor: string): boolean {
+	return path === ancestor || path.startsWith(ancestor + "/");
+}
+
 // History entry marking the Recents view. NUL can never appear in a vault
 // path, so it can't collide with a real folder.
 const RECENTS_LOCATION = "\u0000recents";
@@ -107,12 +112,17 @@ export class MobileExplorerView extends ItemView {
 		this.setupSwipeBack();
 		this.setupMouseNav();
 
-		const active = this.app.workspace.getActiveFile();
-		if (active?.parent) {
-			this.setFolder(active.parent, active.path);
-		} else {
-			this.setFolder(this.home);
-		}
+		// The vault index may still be loading when a restored leaf opens
+		// (notably on mobile); resolving home before then falls back to the
+		// vault root. Wait for the index so the configured home is honoured.
+		this.app.workspace.onLayoutReady(() => {
+			const active = this.app.workspace.getActiveFile();
+			if (active?.parent) {
+				this.setFolder(active.parent, active.path);
+			} else {
+				this.setFolder(this.home);
+			}
+		});
 	}
 
 	async onClose() {
@@ -130,15 +140,17 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	/**
-	 * The device's home folder changed. Jump to the new home (or, when the
-	 * change came from a rename, just redraw in place).
+	 * The device's home folder changed. Jump to the new home, or, when home
+	 * merely moved or appeared/disappeared, redraw in place. The list only
+	 * depends on home for its Recents entry, so that redraw goes through the
+	 * debounce and coalesces with the refresh the vault event itself causes.
 	 */
 	onHomeChanged(navigate: boolean) {
 		if (navigate) {
 			this.setFolder(this.home);
 		} else {
 			this.renderHeader();
-			this.renderList();
+			this.debouncedRefresh();
 		}
 	}
 
@@ -190,10 +202,7 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	private isCurrentFolderAtOrUnder(path: string): boolean {
-		return (
-			this.currentFolder.path === path ||
-			this.currentFolder.path.startsWith(path + "/")
-		);
+		return isPathAtOrUnder(this.currentFolder.path, path);
 	}
 
 	private debouncedRefresh() {
@@ -506,20 +515,17 @@ export class MobileExplorerView extends ItemView {
 
 	private renderHeader() {
 		this.headerEl.empty();
-		const navParent = this.parentForNav();
-		const showBack = !!navParent || this.showingRecents;
+		// Leaving Recents returns to the folder it was opened from.
+		const backTarget = this.showingRecents
+			? this.currentFolder
+			: this.parentForNav();
 
-		if (showBack) {
+		if (backTarget) {
 			const nav = this.headerEl.createDiv("mobile-explorer-nav");
 			const backIcon = nav.createDiv("mobile-explorer-back-icon");
 			setIcon(backIcon, "chevron-left");
 			const backLabel = nav.createSpan("mobile-explorer-back-label");
-			if (this.showingRecents || !navParent) {
-				// Leaving Recents returns to the folder it was opened from.
-				backLabel.textContent = this.locationName(this.currentFolder);
-			} else {
-				backLabel.textContent = this.locationName(navParent);
-			}
+			backLabel.textContent = this.locationName(backTarget);
 			nav.addEventListener("click", () => this.navigateToParent());
 			this.setupDropZone(nav, {
 				springNavigate: () => this.navigateToParent(),

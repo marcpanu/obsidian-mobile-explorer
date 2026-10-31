@@ -3,12 +3,13 @@ import {
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TAbstractFile,
 	TFile,
 	TFolder,
 	Vault,
 	setIcon,
 } from "obsidian";
-import { MobileExplorerView, VIEW_TYPE } from "./view";
+import { MobileExplorerView, VIEW_TYPE, isPathAtOrUnder } from "./view";
 import { printNote } from "./print";
 
 interface Shortcut {
@@ -26,7 +27,9 @@ const DEFAULT_SETTINGS: MobileExplorerSettings = {
 
 // The home folder is stored per device (in localStorage, not data.json) so
 // each device can treat a different folder as the top of the explorer.
-const HOME_FOLDER_KEY = "home-folder";
+// localStorage keys are only scoped per vault, not per plugin, so the key
+// carries the plugin id to stay clear of other plugins.
+const HOME_FOLDER_KEY = "mobile-explorer-home-folder";
 
 const SHORTCUT_ICONS = [
 	"folder-open",
@@ -58,6 +61,10 @@ const SHORTCUT_ICONS = [
 
 export default class MobileExplorerPlugin extends Plugin {
 	settings!: MobileExplorerSettings;
+	// Cached home folder path; null until first read. Views ask for home on
+	// every render and touch event, so this avoids a localStorage round trip
+	// each time.
+	private homePath: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -110,17 +117,24 @@ export default class MobileExplorerPlugin extends Plugin {
 			this.app.vault.on("rename", (file, oldPath) => {
 				if (!(file instanceof TFolder)) return;
 				const home = this.getHomeFolderPath();
-				if (!home) return;
-				if (home === oldPath) {
-					this.setHomeFolderPath(file.path, false);
-				} else if (home.startsWith(oldPath + "/")) {
-					this.setHomeFolderPath(
-						file.path + home.slice(oldPath.length),
-						false
-					);
-				}
+				if (!isPathAtOrUnder(home, oldPath)) return;
+				this.setHomeFolderPath(
+					file.path + home.slice(oldPath.length),
+					false
+				);
 			})
 		);
+
+		// Creating or deleting the home folder (or an ancestor) switches the
+		// explorer between that folder and the vault root, so views need to
+		// redraw even though the stored path is unchanged.
+		const onHomeExistenceChanged = (file: TAbstractFile) => {
+			if (!(file instanceof TFolder)) return;
+			if (!isPathAtOrUnder(this.getHomeFolderPath(), file.path)) return;
+			for (const view of this.getViews()) view.onHomeChanged(false);
+		};
+		this.registerEvent(this.app.vault.on("create", onHomeExistenceChanged));
+		this.registerEvent(this.app.vault.on("delete", onHomeExistenceChanged));
 
 		this.app.workspace.onLayoutReady(() => this.activateView());
 	}
@@ -130,14 +144,18 @@ export default class MobileExplorerPlugin extends Plugin {
 	 * (meaning the vault root).
 	 */
 	getHomeFolderPath(): string {
-		const value: unknown = this.app.loadLocalStorage(HOME_FOLDER_KEY);
-		return typeof value === "string" ? value : "";
+		if (this.homePath === null) {
+			const value: unknown = this.app.loadLocalStorage(HOME_FOLDER_KEY);
+			this.homePath = typeof value === "string" ? value : "";
+		}
+		return this.homePath;
 	}
 
 	/**
 	 * Set the home folder for this device. Pass "" to use the vault root.
 	 */
 	setHomeFolderPath(path: string, navigate = true) {
+		this.homePath = path;
 		this.app.saveLocalStorage(HOME_FOLDER_KEY, path || null);
 		for (const view of this.getViews()) view.onHomeChanged(navigate);
 	}
@@ -204,11 +222,10 @@ export default class MobileExplorerPlugin extends Plugin {
 	private revealActiveFile() {
 		const file = this.app.workspace.getActiveFile();
 		if (!file?.parent) return;
-		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
-		if (leaves.length > 0) {
-			const view = leaves[0].view as MobileExplorerView;
+		const view = this.getViews()[0];
+		if (view) {
 			view.revealFile(file);
-			void this.app.workspace.revealLeaf(leaves[0]);
+			void this.app.workspace.revealLeaf(view.leaf);
 		}
 	}
 }
