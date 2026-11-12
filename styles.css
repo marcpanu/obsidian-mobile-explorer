@@ -210,7 +210,25 @@ body.is-mobile .mobile-explorer-item {
 	box-shadow: inset 2px 0 0 var(--interactive-accent);
 }
 
-/* Drag & drop (desktop) */
+/* Drag & drop */
+.mobile-explorer-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: var(--layer-dragged-item, 1000);
+	max-width: 70vw;
+	padding: 8px 14px;
+	border-radius: 10px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: var(--font-ui-medium);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	box-shadow: var(--shadow-s);
+	pointer-events: none;
+}
+
 .mobile-explorer-item.is-dragging {
 	opacity: 0.4;
 }
