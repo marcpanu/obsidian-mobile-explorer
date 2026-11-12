@@ -184,6 +184,13 @@
 	-webkit-tap-highlight-color: transparent;
 }
 
+/* Long-press opens the context menu; suppress text selection and the iOS callout. */
+body.is-mobile .mobile-explorer-item {
+	-webkit-touch-callout: none;
+	-webkit-user-select: none;
+	user-select: none;
+}
+
 .mobile-explorer-item:not(:last-child) {
 	border-bottom: 0.5px solid var(--background-modifier-border);
 }

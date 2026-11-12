@@ -27,6 +27,7 @@ export class MobileExplorerView extends ItemView {
 	private listEl!: HTMLElement;
 	private isAnimating = false;
 	private longPressTriggered = false;
+	private lastMenuOpenedAt = 0;
 	private refreshTimer: number | null = null;
 
 	private readonly isDesktop = Platform.isDesktop;
@@ -889,25 +890,81 @@ export class MobileExplorerView extends ItemView {
 		return item;
 	}
 
-	// --- Right-click context menu (desktop) ---
+	// --- Context menu: right-click (desktop) and long-press (touch) ---
 
 	private addContextMenu(el: HTMLElement, file: TAbstractFile) {
-		el.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			this.longPressTriggered = true;
+		const open = (x: number, y: number) => {
+			// A long-press can also raise a native "contextmenu" event (Android);
+			// make sure only one menu opens per gesture.
+			const now = Date.now();
+			if (now - this.lastMenuOpenedAt < 800) return;
+			this.lastMenuOpenedAt = now;
 
-			// If right-clicking an item within an active multi-selection, act on
-			// the whole group. Right-clicking anything else clears the selection.
+			// If the item is part of an active multi-selection, act on the whole
+			// group. Opening the menu on anything else clears the selection.
 			if (
 				this.selectedPaths.size > 1 &&
 				this.selectedPaths.has(file.path)
 			) {
-				this.showSelectionMenu(e.clientX, e.clientY);
+				this.showSelectionMenu(x, y);
 				return;
 			}
 			if (this.selectedPaths.size > 0) this.clearSelection();
-			this.showContextMenu(e.clientX, e.clientY, file);
+			this.showContextMenu(x, y, file);
+		};
+
+		el.addEventListener("contextmenu", (e) => {
+			e.preventDefault();
+			open(e.clientX, e.clientY);
 		});
+
+		// iOS never fires "contextmenu" for a long-press, so detect it from
+		// touch events.
+		let timer: number | null = null;
+		let startX = 0;
+		let startY = 0;
+		const cancel = () => {
+			if (timer !== null) {
+				window.clearTimeout(timer);
+				timer = null;
+			}
+		};
+		el.addEventListener(
+			"touchstart",
+			(e) => {
+				cancel();
+				this.longPressTriggered = false;
+				if (e.touches.length !== 1) return;
+				const touch = e.touches[0];
+				if (!touch) return;
+				startX = touch.clientX;
+				startY = touch.clientY;
+				timer = window.setTimeout(() => {
+					timer = null;
+					if (this.isAnimating || !el.isConnected) return;
+					// Swallow the click that follows when the finger lifts.
+					this.longPressTriggered = true;
+					open(startX, startY);
+				}, 500);
+			},
+			{ passive: true }
+		);
+		el.addEventListener(
+			"touchmove",
+			(e) => {
+				const touch = e.touches[0];
+				if (
+					!touch ||
+					Math.abs(touch.clientX - startX) > 10 ||
+					Math.abs(touch.clientY - startY) > 10
+				) {
+					cancel();
+				}
+			},
+			{ passive: true }
+		);
+		el.addEventListener("touchend", cancel);
+		el.addEventListener("touchcancel", cancel);
 	}
 
 	private showSelectionMenu(x: number, y: number) {
@@ -955,24 +1012,26 @@ export class MobileExplorerView extends ItemView {
 						void this.app.workspace.getLeaf("tab").openFile(file);
 					})
 			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Open to the right")
-					.setIcon("lucide-separator-vertical")
-					.setSection("open")
-					.onClick(() => {
-						void this.app.workspace.getLeaf("split").openFile(file);
-					})
-			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Open in new window")
-					.setIcon("lucide-picture-in-picture-2")
-					.setSection("open")
-					.onClick(() => {
-						void this.app.workspace.getLeaf("window").openFile(file);
-					})
-			);
+			if (this.isDesktop) {
+				menu.addItem((item) =>
+					item
+						.setTitle("Open to the right")
+						.setIcon("lucide-separator-vertical")
+						.setSection("open")
+						.onClick(() => {
+							void this.app.workspace.getLeaf("split").openFile(file);
+						})
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Open in new window")
+						.setIcon("lucide-picture-in-picture-2")
+						.setSection("open")
+						.onClick(() => {
+							void this.app.workspace.getLeaf("window").openFile(file);
+						})
+				);
+			}
 			menu.addSeparator();
 			menu.addItem((item) =>
 				item
@@ -1140,6 +1199,9 @@ export class MobileExplorerView extends ItemView {
 	// --- Drag & drop (desktop) ---
 
 	private setupDragSource(item: HTMLElement, file: TAbstractFile) {
+		// Touch platforms use long-press for the context menu; a draggable
+		// row would start a native drag there instead.
+		if (!this.isDesktop) return;
 		item.draggable = true;
 		item.addEventListener("dragstart", (e) => {
 			let paths: string[];
