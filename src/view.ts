@@ -18,6 +18,12 @@ export const VIEW_TYPE = "mobile-explorer";
 // path, so it can't collide with a real folder.
 const RECENTS_LOCATION = "\u0000recents";
 
+interface DropZoneOptions {
+	canDrop?: () => boolean;
+	onDrop?: () => void;
+	springNavigate?: () => void;
+}
+
 export class MobileExplorerView extends ItemView {
 	private plugin: MobileExplorerPlugin;
 	private currentFolder: TFolder;
@@ -27,6 +33,7 @@ export class MobileExplorerView extends ItemView {
 	private listEl!: HTMLElement;
 	private isAnimating = false;
 	private longPressTriggered = false;
+	private lastMenuOpenedAt = 0;
 	private refreshTimer: number | null = null;
 
 	private readonly isDesktop = Platform.isDesktop;
@@ -35,6 +42,10 @@ export class MobileExplorerView extends ItemView {
 	private draggedPaths: string[] = [];
 	private springTimer: number | null = null;
 	private activeDropEl: HTMLElement | null = null;
+	private dropZones = new WeakMap<HTMLElement, DropZoneOptions>();
+	private touchGhostEl: HTMLElement | null = null;
+	private touchScrollTimer: number | null = null;
+	private touchScrollSpeed = 0;
 	private showingRecents = false;
 	private navBackStack: string[] = [];
 	private navForwardStack: string[] = [];
@@ -93,6 +104,7 @@ export class MobileExplorerView extends ItemView {
 
 	async onClose() {
 		if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+		if (this.touchGhostEl) this.endTouchDrag(false);
 	}
 
 	revealFile(file: TFile) {
@@ -837,7 +849,7 @@ export class MobileExplorerView extends ItemView {
 			springNavigate: () => this.enterFolder(folder),
 		});
 
-		this.addContextMenu(item, folder);
+		this.addContextMenu(item, folder, true);
 		return item;
 	}
 
@@ -885,32 +897,128 @@ export class MobileExplorerView extends ItemView {
 			this.openFile(file);
 		});
 
-		this.addContextMenu(item, file);
+		this.addContextMenu(item, file, true);
 		return item;
 	}
 
-	// --- Right-click context menu (desktop) ---
+	// --- Context menu: right-click (desktop) and long-press (touch) ---
 
-	private addContextMenu(el: HTMLElement, file: TAbstractFile) {
-		el.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			this.longPressTriggered = true;
+	// On touch devices a long-press opens the menu; if the finger then moves
+	// without lifting, the menu is dismissed and the row is dragged instead
+	// (when `canDrag` is set).
+	private addContextMenu(el: HTMLElement, file: TAbstractFile, canDrag = false) {
+		const open = (x: number, y: number): Menu | null => {
+			// A long-press can also raise a native "contextmenu" event (Android);
+			// make sure only one menu opens per gesture.
+			const now = Date.now();
+			if (now - this.lastMenuOpenedAt < 800) return null;
+			this.lastMenuOpenedAt = now;
 
-			// If right-clicking an item within an active multi-selection, act on
-			// the whole group. Right-clicking anything else clears the selection.
+			// If the item is part of an active multi-selection, act on the whole
+			// group. Opening the menu on anything else clears the selection.
 			if (
 				this.selectedPaths.size > 1 &&
 				this.selectedPaths.has(file.path)
 			) {
-				this.showSelectionMenu(e.clientX, e.clientY);
-				return;
+				return this.showSelectionMenu(x, y);
 			}
 			if (this.selectedPaths.size > 0) this.clearSelection();
-			this.showContextMenu(e.clientX, e.clientY, file);
+			return this.showContextMenu(x, y, file);
+		};
+
+		el.addEventListener("contextmenu", (e) => {
+			e.preventDefault();
+			open(e.clientX, e.clientY);
 		});
+
+		// iOS never fires "contextmenu" for a long-press, so detect it from
+		// touch events.
+		let state: "idle" | "pending" | "pressed" | "dragging" = "idle";
+		let timer: number | null = null;
+		let menu: Menu | null = null;
+		let startX = 0;
+		let startY = 0;
+		const clearTimer = () => {
+			if (timer !== null) {
+				window.clearTimeout(timer);
+				timer = null;
+			}
+		};
+		const movedFar = (touch: Touch) =>
+			Math.abs(touch.clientX - startX) > 10 ||
+			Math.abs(touch.clientY - startY) > 10;
+
+		el.addEventListener(
+			"touchstart",
+			(e) => {
+				clearTimer();
+				if (state === "dragging") this.endTouchDrag(false);
+				state = "idle";
+				menu = null;
+				this.longPressTriggered = false;
+				if (e.touches.length !== 1) return;
+				const touch = e.touches[0];
+				if (!touch) return;
+				startX = touch.clientX;
+				startY = touch.clientY;
+				state = "pending";
+				timer = window.setTimeout(() => {
+					timer = null;
+					if (this.isAnimating || !el.isConnected) {
+						state = "idle";
+						return;
+					}
+					state = "pressed";
+					// Swallow the click that follows when the finger lifts.
+					this.longPressTriggered = true;
+					menu = open(startX, startY);
+				}, 500);
+			},
+			{ passive: true }
+		);
+		el.addEventListener(
+			"touchmove",
+			(e) => {
+				const touch = e.touches[0];
+				if (!touch) return;
+				if (state === "pending") {
+					// Moved before the hold completed: it's a scroll or swipe.
+					if (movedFar(touch)) {
+						clearTimer();
+						state = "idle";
+					}
+					return;
+				}
+				if (state === "idle") return;
+
+				// The hold completed: this gesture is ours, not a scroll or the
+				// swipe-back gesture.
+				if (e.cancelable) e.preventDefault();
+				e.stopPropagation();
+				if (state === "pressed") {
+					if (!canDrag || !movedFar(touch)) return;
+					menu?.hide();
+					menu = null;
+					state = "dragging";
+					this.beginTouchDrag(file);
+				}
+				this.updateTouchDrag(touch.clientX, touch.clientY);
+			},
+			{ passive: false }
+		);
+		const finish = (drop: boolean) => (e: TouchEvent) => {
+			clearTimer();
+			if (state === "dragging") {
+				e.stopPropagation();
+				this.endTouchDrag(drop);
+			}
+			state = "idle";
+		};
+		el.addEventListener("touchend", finish(true));
+		el.addEventListener("touchcancel", finish(false));
 	}
 
-	private showSelectionMenu(x: number, y: number) {
+	private showSelectionMenu(x: number, y: number): Menu {
 		const items = this.getSelectedItems();
 		const files = items.filter((f) => f instanceof TFile);
 		const menu = new Menu();
@@ -935,9 +1043,10 @@ export class MobileExplorerView extends ItemView {
 				})
 		);
 		menu.showAtPosition({ x, y });
+		return menu;
 	}
 
-	private showContextMenu(x: number, y: number, file: TAbstractFile) {
+	private showContextMenu(x: number, y: number, file: TAbstractFile): Menu {
 		const menu = new Menu();
 
 		// The native file explorer adds core items (Open in new tab, Rename,
@@ -955,24 +1064,26 @@ export class MobileExplorerView extends ItemView {
 						void this.app.workspace.getLeaf("tab").openFile(file);
 					})
 			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Open to the right")
-					.setIcon("lucide-separator-vertical")
-					.setSection("open")
-					.onClick(() => {
-						void this.app.workspace.getLeaf("split").openFile(file);
-					})
-			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Open in new window")
-					.setIcon("lucide-picture-in-picture-2")
-					.setSection("open")
-					.onClick(() => {
-						void this.app.workspace.getLeaf("window").openFile(file);
-					})
-			);
+			if (this.isDesktop) {
+				menu.addItem((item) =>
+					item
+						.setTitle("Open to the right")
+						.setIcon("lucide-separator-vertical")
+						.setSection("open")
+						.onClick(() => {
+							void this.app.workspace.getLeaf("split").openFile(file);
+						})
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Open in new window")
+						.setIcon("lucide-picture-in-picture-2")
+						.setSection("open")
+						.onClick(() => {
+							void this.app.workspace.getLeaf("window").openFile(file);
+						})
+				);
+			}
 			menu.addSeparator();
 			menu.addItem((item) =>
 				item
@@ -1034,6 +1145,7 @@ export class MobileExplorerView extends ItemView {
 		this.app.workspace.trigger("file-menu", menu, file, "file-explorer-context-menu");
 
 		menu.showAtPosition({ x, y });
+		return menu;
 	}
 
 	private startInlineRename(file: TAbstractFile) {
@@ -1137,42 +1249,132 @@ export class MobileExplorerView extends ItemView {
 		return items;
 	}
 
-	// --- Drag & drop (desktop) ---
+	// --- Drag & drop (native on desktop, touch-driven on mobile) ---
 
 	private setupDragSource(item: HTMLElement, file: TAbstractFile) {
+		// Touch platforms drag via the long-press gesture in addContextMenu; a
+		// natively draggable row would hijack the long-press there.
+		if (!this.isDesktop) return;
 		item.draggable = true;
 		item.addEventListener("dragstart", (e) => {
-			let paths: string[];
-			if (this.selectedPaths.has(file.path)) {
-				paths = [...this.selectedPaths];
-			} else {
-				if (this.selectedPaths.size > 0) this.clearSelection();
-				paths = [file.path];
-			}
-			this.draggedPaths = paths;
+			const paths = this.beginDrag(file);
 			e.dataTransfer?.setData("text/plain", paths.join("\n"));
 			if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-			for (const p of paths) this.itemEls.get(p)?.addClass("is-dragging");
 		});
-		item.addEventListener("dragend", () => {
-			for (const p of this.draggedPaths) {
-				this.itemEls.get(p)?.removeClass("is-dragging");
-			}
-			this.draggedPaths = [];
-			this.clearSpringTimer();
-			this.activeDropEl?.removeClass("is-drop-target");
-			this.activeDropEl = null;
+		item.addEventListener("dragend", () => this.endDrag());
+	}
+
+	private beginDrag(file: TAbstractFile): string[] {
+		let paths: string[];
+		if (this.selectedPaths.has(file.path)) {
+			paths = [...this.selectedPaths];
+		} else {
+			if (this.selectedPaths.size > 0) this.clearSelection();
+			paths = [file.path];
+		}
+		this.draggedPaths = paths;
+		for (const p of paths) this.itemEls.get(p)?.addClass("is-dragging");
+		return paths;
+	}
+
+	private endDrag() {
+		for (const p of this.draggedPaths) {
+			this.itemEls.get(p)?.removeClass("is-dragging");
+		}
+		this.draggedPaths = [];
+		this.clearSpringTimer();
+		this.activeDropEl?.removeClass("is-drop-target");
+		this.activeDropEl = null;
+	}
+
+	private beginTouchDrag(file: TAbstractFile) {
+		const paths = this.beginDrag(file);
+		const name = file instanceof TFile ? file.basename : file.name;
+		this.touchGhostEl = activeDocument.body.createDiv({
+			cls: "mobile-explorer-drag-ghost",
+			text: paths.length > 1 ? `${paths.length} items` : name,
 		});
 	}
 
-	private setupDropZone(
-		el: HTMLElement,
-		opts: {
-			canDrop?: () => boolean;
-			onDrop?: () => void;
-			springNavigate?: () => void;
+	private updateTouchDrag(x: number, y: number) {
+		this.touchGhostEl?.setCssStyles({
+			transform: `translate(${x}px, ${y}px) translate(-50%, -150%)`,
+		});
+
+		// Find the innermost drop zone under the finger that accepts the drag.
+		let zone: HTMLElement | null = null;
+		let node = activeDocument.elementFromPoint(x, y);
+		while (node) {
+			if (node.instanceOf(HTMLElement)) {
+				const opts = this.dropZones.get(node);
+				if (opts && (!opts.canDrop || opts.canDrop())) {
+					zone = node;
+					break;
+				}
+			}
+			node = node.parentElement;
 		}
-	) {
+		if (zone !== this.activeDropEl) {
+			if (this.activeDropEl) this.leaveDropZone(this.activeDropEl);
+			if (zone) this.enterDropZone(zone);
+		}
+
+		// Auto-scroll the list while the finger is near its top/bottom edge.
+		const rect = this.listEl.getBoundingClientRect();
+		const edge = 56;
+		const speed =
+			y < rect.top + edge ? -10 : y > rect.bottom - edge ? 10 : 0;
+		if (speed === 0) {
+			this.clearTouchScroll();
+		} else if (this.touchScrollSpeed !== speed) {
+			this.clearTouchScroll();
+			this.touchScrollSpeed = speed;
+			this.touchScrollTimer = window.setInterval(() => {
+				this.listEl.scrollTop += speed;
+			}, 16);
+		}
+	}
+
+	private endTouchDrag(drop: boolean) {
+		const zone = this.activeDropEl;
+		if (drop && zone?.isConnected) this.dropZones.get(zone)?.onDrop?.();
+		this.clearTouchScroll();
+		this.touchGhostEl?.remove();
+		this.touchGhostEl = null;
+		this.endDrag();
+	}
+
+	private clearTouchScroll() {
+		if (this.touchScrollTimer !== null) {
+			window.clearInterval(this.touchScrollTimer);
+			this.touchScrollTimer = null;
+		}
+		this.touchScrollSpeed = 0;
+	}
+
+	private enterDropZone(el: HTMLElement) {
+		if (this.activeDropEl && this.activeDropEl !== el) {
+			this.activeDropEl.removeClass("is-drop-target");
+		}
+		this.activeDropEl = el;
+		el.addClass("is-drop-target");
+		const opts = this.dropZones.get(el);
+		if (opts?.springNavigate && this.springTimer === null) {
+			this.springTimer = window.setTimeout(() => {
+				this.springTimer = null;
+				opts.springNavigate!();
+			}, 700);
+		}
+	}
+
+	private leaveDropZone(el: HTMLElement) {
+		el.removeClass("is-drop-target");
+		if (this.activeDropEl === el) this.activeDropEl = null;
+		this.clearSpringTimer();
+	}
+
+	private setupDropZone(el: HTMLElement, opts: DropZoneOptions) {
+		this.dropZones.set(el, opts);
 		el.addEventListener("dragover", (e) => {
 			if (this.draggedPaths.length === 0) return;
 			if (opts.canDrop && !opts.canDrop()) return;
@@ -1180,32 +1382,18 @@ export class MobileExplorerView extends ItemView {
 			// Innermost drop zone wins (folder rows over the list background).
 			e.stopPropagation();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-			if (this.activeDropEl && this.activeDropEl !== el) {
-				this.activeDropEl.removeClass("is-drop-target");
-			}
-			this.activeDropEl = el;
-			el.addClass("is-drop-target");
-			if (opts.springNavigate && this.springTimer === null) {
-				this.springTimer = window.setTimeout(() => {
-					this.springTimer = null;
-					opts.springNavigate!();
-				}, 700);
-			}
+			this.enterDropZone(el);
 		});
 		el.addEventListener("dragleave", (e) => {
 			if (e.relatedTarget instanceof Node && el.contains(e.relatedTarget))
 				return;
-			el.removeClass("is-drop-target");
-			if (this.activeDropEl === el) this.activeDropEl = null;
-			this.clearSpringTimer();
+			this.leaveDropZone(el);
 		});
 		if (opts.onDrop) {
 			el.addEventListener("drop", (e) => {
 				e.preventDefault();
 				e.stopPropagation();
-				el.removeClass("is-drop-target");
-				if (this.activeDropEl === el) this.activeDropEl = null;
-				this.clearSpringTimer();
+				this.leaveDropZone(el);
 				opts.onDrop!();
 			});
 		}
