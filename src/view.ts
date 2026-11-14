@@ -23,6 +23,12 @@ export function isPathAtOrUnder(path: string, ancestor: string): boolean {
 // path, so it can't collide with a real folder.
 const RECENTS_LOCATION = "\u0000recents";
 
+interface DropZoneOptions {
+	canDrop?: () => boolean;
+	onDrop?: () => void;
+	springNavigate?: () => void;
+}
+
 export class MobileExplorerView extends ItemView {
 	private plugin: MobileExplorerPlugin;
 	private currentFolder: TFolder;
@@ -32,7 +38,15 @@ export class MobileExplorerView extends ItemView {
 	private listEl!: HTMLElement;
 	private isAnimating = false;
 	private longPressTriggered = false;
+	private lastMenuOpenedAt = 0;
 	private refreshTimer: number | null = null;
+	// While an inline rename input is on screen, list re-renders are held
+	// back so they don't replace the input mid-edit; the refresh runs once
+	// the rename finishes. The input element is the source of truth: if a
+	// swipe or navigation rebuilt the list underneath it, it is no longer
+	// connected and the guard lifts on its own.
+	private renameInput: HTMLInputElement | null = null;
+	private refreshDeferred = false;
 
 	private readonly isDesktop = Platform.isDesktop;
 	private selectedPaths = new Set<string>();
@@ -40,6 +54,10 @@ export class MobileExplorerView extends ItemView {
 	private draggedPaths: string[] = [];
 	private springTimer: number | null = null;
 	private activeDropEl: HTMLElement | null = null;
+	private dropZones = new WeakMap<HTMLElement, DropZoneOptions>();
+	private touchGhostEl: HTMLElement | null = null;
+	private touchScrollTimer: number | null = null;
+	private touchScrollSpeed = 0;
 	private showingRecents = false;
 	private navBackStack: string[] = [];
 	private navForwardStack: string[] = [];
@@ -126,7 +144,8 @@ export class MobileExplorerView extends ItemView {
 	}
 
 	async onClose() {
-		if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+		this.cancelPendingRefresh();
+		if (this.touchGhostEl) this.endTouchDrag(false);
 	}
 
 	revealFile(file: TFile) {
@@ -160,6 +179,7 @@ export class MobileExplorerView extends ItemView {
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
 				if (this.isPathInCurrentFolder(file.path)) this.debouncedRefresh();
+				else this.updateSubfolderCount(file.path);
 			})
 		);
 		this.registerEvent(
@@ -173,6 +193,7 @@ export class MobileExplorerView extends ItemView {
 				// Note: Obsidian nulls file.parent before firing "delete", so the
 				// parent must be derived from the path rather than file.parent.
 				if (this.isPathInCurrentFolder(file.path)) this.debouncedRefresh();
+				else this.updateSubfolderCount(file.path);
 			})
 		);
 		this.registerEvent(
@@ -190,23 +211,67 @@ export class MobileExplorerView extends ItemView {
 					this.isPathInCurrentFolder(oldPath)
 				) {
 					this.debouncedRefresh();
+				} else {
+					this.updateSubfolderCount(oldPath);
+					this.updateSubfolderCount(file.path);
 				}
 			})
 		);
 	}
 
-	private isPathInCurrentFolder(path: string): boolean {
+	private parentPathOf(path: string): string {
 		const lastSlash = path.lastIndexOf("/");
-		const parentPath = lastSlash === -1 ? "/" : path.substring(0, lastSlash);
-		return parentPath === this.currentFolder.path;
+		return lastSlash === -1 ? "/" : path.substring(0, lastSlash);
+	}
+
+	private isPathInCurrentFolder(path: string): boolean {
+		return this.parentPathOf(path) === this.currentFolder.path;
+	}
+
+	/**
+	 * Keep a subfolder row's item count current when something is added to
+	 * or removed from that subfolder (e.g. by sync). Changes directly in the
+	 * current folder are covered by the full refresh instead.
+	 */
+	private updateSubfolderCount(path: string) {
+		const folderPath = this.parentPathOf(path);
+		if (!this.isPathInCurrentFolder(folderPath)) return;
+		const el = this.itemEls.get(folderPath);
+		const folder = this.app.vault.getAbstractFileByPath(folderPath);
+		if (!el || !(folder instanceof TFolder)) return;
+		const countEl = el.querySelector(".mobile-explorer-item-count");
+		if (countEl) countEl.textContent = String(folder.children.length);
 	}
 
 	private isCurrentFolderAtOrUnder(path: string): boolean {
 		return isPathAtOrUnder(this.currentFolder.path, path);
 	}
 
+	private cancelPendingRefresh() {
+		if (this.refreshTimer !== null) {
+			window.clearTimeout(this.refreshTimer);
+			this.refreshTimer = null;
+		}
+	}
+
+	/** True while an inline rename input is live in the list. */
+	private isRenaming(): boolean {
+		if (this.renameInput === null) return false;
+		if (this.renameInput.isConnected) return true;
+		// The input was torn down by a re-render that bypassed the rename's
+		// own finish (swipe-back, delete handler, history navigation). The
+		// list was rebuilt anyway, so no refresh is owed.
+		this.renameInput = null;
+		this.refreshDeferred = false;
+		return false;
+	}
+
 	private debouncedRefresh() {
-		if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+		if (this.isRenaming()) {
+			this.refreshDeferred = true;
+			return;
+		}
+		this.cancelPendingRefresh();
 		this.refreshTimer = window.setTimeout(() => {
 			this.refreshTimer = null;
 			this.renderList();
@@ -547,7 +612,9 @@ export class MobileExplorerView extends ItemView {
 
 		const newFolderBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newFolderBtn, "folder-plus");
-		newFolderBtn.addEventListener("click", () => void this.createNewFolder());
+		newFolderBtn.addEventListener("click", () =>
+			void this.createNewFolder(this.currentFolder)
+		);
 
 		const newNoteBtn = actions.createDiv("mobile-explorer-action-btn");
 		setIcon(newNoteBtn, "square-pen");
@@ -880,7 +947,7 @@ export class MobileExplorerView extends ItemView {
 			springNavigate: () => this.enterFolder(folder),
 		});
 
-		this.addContextMenu(item, folder);
+		this.addContextMenu(item, folder, true);
 		return item;
 	}
 
@@ -928,32 +995,128 @@ export class MobileExplorerView extends ItemView {
 			this.openFile(file);
 		});
 
-		this.addContextMenu(item, file);
+		this.addContextMenu(item, file, true);
 		return item;
 	}
 
-	// --- Right-click context menu (desktop) ---
+	// --- Context menu: right-click (desktop) and long-press (touch) ---
 
-	private addContextMenu(el: HTMLElement, file: TAbstractFile) {
-		el.addEventListener("contextmenu", (e) => {
-			e.preventDefault();
-			this.longPressTriggered = true;
+	// On touch devices a long-press opens the menu; if the finger then moves
+	// without lifting, the menu is dismissed and the row is dragged instead
+	// (when `canDrag` is set).
+	private addContextMenu(el: HTMLElement, file: TAbstractFile, canDrag = false) {
+		const open = (x: number, y: number): Menu | null => {
+			// A long-press can also raise a native "contextmenu" event (Android);
+			// make sure only one menu opens per gesture.
+			const now = Date.now();
+			if (now - this.lastMenuOpenedAt < 800) return null;
+			this.lastMenuOpenedAt = now;
 
-			// If right-clicking an item within an active multi-selection, act on
-			// the whole group. Right-clicking anything else clears the selection.
+			// If the item is part of an active multi-selection, act on the whole
+			// group. Opening the menu on anything else clears the selection.
 			if (
 				this.selectedPaths.size > 1 &&
 				this.selectedPaths.has(file.path)
 			) {
-				this.showSelectionMenu(e.clientX, e.clientY);
-				return;
+				return this.showSelectionMenu(x, y);
 			}
 			if (this.selectedPaths.size > 0) this.clearSelection();
-			this.showContextMenu(e.clientX, e.clientY, file);
+			return this.showContextMenu(x, y, file);
+		};
+
+		el.addEventListener("contextmenu", (e) => {
+			e.preventDefault();
+			open(e.clientX, e.clientY);
 		});
+
+		// iOS never fires "contextmenu" for a long-press, so detect it from
+		// touch events.
+		let state: "idle" | "pending" | "pressed" | "dragging" = "idle";
+		let timer: number | null = null;
+		let menu: Menu | null = null;
+		let startX = 0;
+		let startY = 0;
+		const clearTimer = () => {
+			if (timer !== null) {
+				window.clearTimeout(timer);
+				timer = null;
+			}
+		};
+		const movedFar = (touch: Touch) =>
+			Math.abs(touch.clientX - startX) > 10 ||
+			Math.abs(touch.clientY - startY) > 10;
+
+		el.addEventListener(
+			"touchstart",
+			(e) => {
+				clearTimer();
+				if (state === "dragging") this.endTouchDrag(false);
+				state = "idle";
+				menu = null;
+				this.longPressTriggered = false;
+				if (e.touches.length !== 1) return;
+				const touch = e.touches[0];
+				if (!touch) return;
+				startX = touch.clientX;
+				startY = touch.clientY;
+				state = "pending";
+				timer = window.setTimeout(() => {
+					timer = null;
+					if (this.isAnimating || !el.isConnected) {
+						state = "idle";
+						return;
+					}
+					state = "pressed";
+					// Swallow the click that follows when the finger lifts.
+					this.longPressTriggered = true;
+					menu = open(startX, startY);
+				}, 500);
+			},
+			{ passive: true }
+		);
+		el.addEventListener(
+			"touchmove",
+			(e) => {
+				const touch = e.touches[0];
+				if (!touch) return;
+				if (state === "pending") {
+					// Moved before the hold completed: it's a scroll or swipe.
+					if (movedFar(touch)) {
+						clearTimer();
+						state = "idle";
+					}
+					return;
+				}
+				if (state === "idle") return;
+
+				// The hold completed: this gesture is ours, not a scroll or the
+				// swipe-back gesture.
+				if (e.cancelable) e.preventDefault();
+				e.stopPropagation();
+				if (state === "pressed") {
+					if (!canDrag || !movedFar(touch)) return;
+					menu?.hide();
+					menu = null;
+					state = "dragging";
+					this.beginTouchDrag(file);
+				}
+				this.updateTouchDrag(touch.clientX, touch.clientY);
+			},
+			{ passive: false }
+		);
+		const finish = (drop: boolean) => (e: TouchEvent) => {
+			clearTimer();
+			if (state === "dragging") {
+				e.stopPropagation();
+				this.endTouchDrag(drop);
+			}
+			state = "idle";
+		};
+		el.addEventListener("touchend", finish(true));
+		el.addEventListener("touchcancel", finish(false));
 	}
 
-	private showSelectionMenu(x: number, y: number) {
+	private showSelectionMenu(x: number, y: number): Menu {
 		const items = this.getSelectedItems();
 		const files = items.filter((f) => f instanceof TFile);
 		const menu = new Menu();
@@ -978,9 +1141,10 @@ export class MobileExplorerView extends ItemView {
 				})
 		);
 		menu.showAtPosition({ x, y });
+		return menu;
 	}
 
-	private showContextMenu(x: number, y: number, file: TAbstractFile) {
+	private showContextMenu(x: number, y: number, file: TAbstractFile): Menu {
 		const menu = new Menu();
 
 		// The native file explorer adds core items (Open in new tab, Rename,
@@ -998,24 +1162,26 @@ export class MobileExplorerView extends ItemView {
 						void this.app.workspace.getLeaf("tab").openFile(file);
 					})
 			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Open to the right")
-					.setIcon("lucide-separator-vertical")
-					.setSection("open")
-					.onClick(() => {
-						void this.app.workspace.getLeaf("split").openFile(file);
-					})
-			);
-			menu.addItem((item) =>
-				item
-					.setTitle("Open in new window")
-					.setIcon("lucide-picture-in-picture-2")
-					.setSection("open")
-					.onClick(() => {
-						void this.app.workspace.getLeaf("window").openFile(file);
-					})
-			);
+			if (this.isDesktop) {
+				menu.addItem((item) =>
+					item
+						.setTitle("Open to the right")
+						.setIcon("lucide-separator-vertical")
+						.setSection("open")
+						.onClick(() => {
+							void this.app.workspace.getLeaf("split").openFile(file);
+						})
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Open in new window")
+						.setIcon("lucide-picture-in-picture-2")
+						.setSection("open")
+						.onClick(() => {
+							void this.app.workspace.getLeaf("window").openFile(file);
+						})
+				);
+			}
 			menu.addSeparator();
 			menu.addItem((item) =>
 				item
@@ -1043,10 +1209,7 @@ export class MobileExplorerView extends ItemView {
 					.setTitle("New folder")
 					.setIcon("lucide-folder-plus")
 					.setSection("action")
-					.onClick(async () => {
-						const path = this.getUniquePath(file.path, "New folder", true);
-						await this.app.vault.createFolder(path);
-					})
+					.onClick(() => void this.createNewFolder(file))
 			);
 			menu.addSeparator();
 		}
@@ -1077,9 +1240,13 @@ export class MobileExplorerView extends ItemView {
 		this.app.workspace.trigger("file-menu", menu, file, "file-explorer-context-menu");
 
 		menu.showAtPosition({ x, y });
+		return menu;
 	}
 
 	private startInlineRename(file: TAbstractFile) {
+		// One rename at a time: a second input would be destroyed when the
+		// first one finishes and flushes its deferred refresh.
+		if (this.isRenaming()) return;
 		const el = this.itemEls.get(file.path);
 		if (!el) return;
 		const nameEl = el.querySelector<HTMLElement>(".mobile-explorer-item-name");
@@ -1092,9 +1259,42 @@ export class MobileExplorerView extends ItemView {
 		input.type = "text";
 		input.value = originalName;
 		input.addClass("mobile-explorer-inline-rename");
+		// Clicks inside the input must not activate the row (which would
+		// navigate into a folder or open a note), text selection by mouse
+		// must not start a row drag, and a long-press or right-click in the
+		// input is for text editing, not the row's context menu.
+		input.addEventListener("click", (e) => e.stopPropagation());
+		input.addEventListener("dblclick", (e) => e.stopPropagation());
+		input.addEventListener("contextmenu", (e) => e.stopPropagation());
+		input.addEventListener("touchstart", (e) => e.stopPropagation(), {
+			passive: true,
+		});
+		const wasDraggable = el.draggable;
+		el.draggable = false;
 		nameEl.replaceWith(input);
 		input.focus();
 		input.select();
+
+		// A refresh that is already scheduled would rebuild the list and
+		// destroy the input; hold it until the rename finishes instead.
+		if (this.refreshTimer !== null) {
+			this.cancelPendingRefresh();
+			this.refreshDeferred = true;
+		}
+		this.renameInput = input;
+		const finish = () => {
+			el.draggable = wasDraggable;
+			if (this.renameInput === input) this.renameInput = null;
+			if (this.refreshDeferred) {
+				this.refreshDeferred = false;
+				this.debouncedRefresh();
+			}
+		};
+		const revert = () => {
+			input.replaceWith(nameEl);
+			nameEl.textContent = originalName;
+			finish();
+		};
 
 		let committed = false;
 		const commit = async () => {
@@ -1104,8 +1304,7 @@ export class MobileExplorerView extends ItemView {
 			const newName = input.value.trim();
 
 			if (!newName || newName === originalName) {
-				input.replaceWith(nameEl);
-				nameEl.textContent = originalName;
+				revert();
 				return;
 			}
 
@@ -1117,10 +1316,15 @@ export class MobileExplorerView extends ItemView {
 
 			try {
 				await this.app.fileManager.renameFile(file, newPath);
+				// Show the new name right away rather than waiting on the
+				// rename event's refresh: in Recents the renamed file may not
+				// be under the current folder, so that refresh never comes.
+				input.replaceWith(nameEl);
+				nameEl.textContent = newName;
+				finish();
 			} catch {
 				new Notice(`Could not rename "${originalName}"`);
-				input.replaceWith(nameEl);
-				nameEl.textContent = originalName;
+				revert();
 			}
 		};
 
@@ -1130,8 +1334,7 @@ export class MobileExplorerView extends ItemView {
 				void commit();
 			} else if (e.key === "Escape") {
 				committed = true;
-				input.replaceWith(nameEl);
-				nameEl.textContent = originalName;
+				revert();
 			}
 		});
 		input.addEventListener("blur", () => void commit());
@@ -1180,42 +1383,132 @@ export class MobileExplorerView extends ItemView {
 		return items;
 	}
 
-	// --- Drag & drop (desktop) ---
+	// --- Drag & drop (native on desktop, touch-driven on mobile) ---
 
 	private setupDragSource(item: HTMLElement, file: TAbstractFile) {
+		// Touch platforms drag via the long-press gesture in addContextMenu; a
+		// natively draggable row would hijack the long-press there.
+		if (!this.isDesktop) return;
 		item.draggable = true;
 		item.addEventListener("dragstart", (e) => {
-			let paths: string[];
-			if (this.selectedPaths.has(file.path)) {
-				paths = [...this.selectedPaths];
-			} else {
-				if (this.selectedPaths.size > 0) this.clearSelection();
-				paths = [file.path];
-			}
-			this.draggedPaths = paths;
+			const paths = this.beginDrag(file);
 			e.dataTransfer?.setData("text/plain", paths.join("\n"));
 			if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-			for (const p of paths) this.itemEls.get(p)?.addClass("is-dragging");
 		});
-		item.addEventListener("dragend", () => {
-			for (const p of this.draggedPaths) {
-				this.itemEls.get(p)?.removeClass("is-dragging");
-			}
-			this.draggedPaths = [];
-			this.clearSpringTimer();
-			this.activeDropEl?.removeClass("is-drop-target");
-			this.activeDropEl = null;
+		item.addEventListener("dragend", () => this.endDrag());
+	}
+
+	private beginDrag(file: TAbstractFile): string[] {
+		let paths: string[];
+		if (this.selectedPaths.has(file.path)) {
+			paths = [...this.selectedPaths];
+		} else {
+			if (this.selectedPaths.size > 0) this.clearSelection();
+			paths = [file.path];
+		}
+		this.draggedPaths = paths;
+		for (const p of paths) this.itemEls.get(p)?.addClass("is-dragging");
+		return paths;
+	}
+
+	private endDrag() {
+		for (const p of this.draggedPaths) {
+			this.itemEls.get(p)?.removeClass("is-dragging");
+		}
+		this.draggedPaths = [];
+		this.clearSpringTimer();
+		this.activeDropEl?.removeClass("is-drop-target");
+		this.activeDropEl = null;
+	}
+
+	private beginTouchDrag(file: TAbstractFile) {
+		const paths = this.beginDrag(file);
+		const name = file instanceof TFile ? file.basename : file.name;
+		this.touchGhostEl = activeDocument.body.createDiv({
+			cls: "mobile-explorer-drag-ghost",
+			text: paths.length > 1 ? `${paths.length} items` : name,
 		});
 	}
 
-	private setupDropZone(
-		el: HTMLElement,
-		opts: {
-			canDrop?: () => boolean;
-			onDrop?: () => void;
-			springNavigate?: () => void;
+	private updateTouchDrag(x: number, y: number) {
+		this.touchGhostEl?.setCssStyles({
+			transform: `translate(${x}px, ${y}px) translate(-50%, -150%)`,
+		});
+
+		// Find the innermost drop zone under the finger that accepts the drag.
+		let zone: HTMLElement | null = null;
+		let node = activeDocument.elementFromPoint(x, y);
+		while (node) {
+			if (node.instanceOf(HTMLElement)) {
+				const opts = this.dropZones.get(node);
+				if (opts && (!opts.canDrop || opts.canDrop())) {
+					zone = node;
+					break;
+				}
+			}
+			node = node.parentElement;
 		}
-	) {
+		if (zone !== this.activeDropEl) {
+			if (this.activeDropEl) this.leaveDropZone(this.activeDropEl);
+			if (zone) this.enterDropZone(zone);
+		}
+
+		// Auto-scroll the list while the finger is near its top/bottom edge.
+		const rect = this.listEl.getBoundingClientRect();
+		const edge = 56;
+		const speed =
+			y < rect.top + edge ? -10 : y > rect.bottom - edge ? 10 : 0;
+		if (speed === 0) {
+			this.clearTouchScroll();
+		} else if (this.touchScrollSpeed !== speed) {
+			this.clearTouchScroll();
+			this.touchScrollSpeed = speed;
+			this.touchScrollTimer = window.setInterval(() => {
+				this.listEl.scrollTop += speed;
+			}, 16);
+		}
+	}
+
+	private endTouchDrag(drop: boolean) {
+		const zone = this.activeDropEl;
+		if (drop && zone?.isConnected) this.dropZones.get(zone)?.onDrop?.();
+		this.clearTouchScroll();
+		this.touchGhostEl?.remove();
+		this.touchGhostEl = null;
+		this.endDrag();
+	}
+
+	private clearTouchScroll() {
+		if (this.touchScrollTimer !== null) {
+			window.clearInterval(this.touchScrollTimer);
+			this.touchScrollTimer = null;
+		}
+		this.touchScrollSpeed = 0;
+	}
+
+	private enterDropZone(el: HTMLElement) {
+		if (this.activeDropEl && this.activeDropEl !== el) {
+			this.activeDropEl.removeClass("is-drop-target");
+		}
+		this.activeDropEl = el;
+		el.addClass("is-drop-target");
+		const opts = this.dropZones.get(el);
+		if (opts?.springNavigate && this.springTimer === null) {
+			this.springTimer = window.setTimeout(() => {
+				this.springTimer = null;
+				opts.springNavigate!();
+			}, 700);
+		}
+	}
+
+	private leaveDropZone(el: HTMLElement) {
+		el.removeClass("is-drop-target");
+		if (this.activeDropEl === el) this.activeDropEl = null;
+		this.clearSpringTimer();
+	}
+
+	private setupDropZone(el: HTMLElement, opts: DropZoneOptions) {
+		this.dropZones.set(el, opts);
 		el.addEventListener("dragover", (e) => {
 			if (this.draggedPaths.length === 0) return;
 			if (opts.canDrop && !opts.canDrop()) return;
@@ -1223,32 +1516,18 @@ export class MobileExplorerView extends ItemView {
 			// Innermost drop zone wins (folder rows over the list background).
 			e.stopPropagation();
 			if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-			if (this.activeDropEl && this.activeDropEl !== el) {
-				this.activeDropEl.removeClass("is-drop-target");
-			}
-			this.activeDropEl = el;
-			el.addClass("is-drop-target");
-			if (opts.springNavigate && this.springTimer === null) {
-				this.springTimer = window.setTimeout(() => {
-					this.springTimer = null;
-					opts.springNavigate!();
-				}, 700);
-			}
+			this.enterDropZone(el);
 		});
 		el.addEventListener("dragleave", (e) => {
 			if (e.relatedTarget instanceof Node && el.contains(e.relatedTarget))
 				return;
-			el.removeClass("is-drop-target");
-			if (this.activeDropEl === el) this.activeDropEl = null;
-			this.clearSpringTimer();
+			this.leaveDropZone(el);
 		});
 		if (opts.onDrop) {
 			el.addEventListener("drop", (e) => {
 				e.preventDefault();
 				e.stopPropagation();
-				el.removeClass("is-drop-target");
-				if (this.activeDropEl === el) this.activeDropEl = null;
-				this.clearSpringTimer();
+				this.leaveDropZone(el);
 				opts.onDrop!();
 			});
 		}
@@ -1312,13 +1591,24 @@ export class MobileExplorerView extends ItemView {
 		this.openFile(file);
 	}
 
-	private async createNewFolder() {
-		const path = this.getUniquePath(
-			this.currentFolder.path,
-			"New folder",
-			true
-		);
-		await this.app.vault.createFolder(path);
+	/**
+	 * Create a folder inside `parent` and immediately put its row into inline
+	 * rename mode, so the user can type the name without a second step.
+	 */
+	private async createNewFolder(parent: TFolder) {
+		if (this.isAnimating || this.isRenaming()) return;
+		const path = this.getUniquePath(parent.path, "New folder", true);
+		const folder = await this.app.vault.createFolder(path);
+		// A swipe may have started during the await; rendering into a list
+		// that is mid-transition would corrupt navigation state.
+		if (this.isAnimating) return;
+
+		// Make sure the new row is on screen now rather than after the
+		// debounced vault-event refresh. setFolder only records history when
+		// the location actually changes, so when the parent is already the
+		// folder being shown this is just a re-render.
+		this.setFolder(parent, folder.path);
+		this.startInlineRename(folder);
 	}
 
 	private getUniquePath(
