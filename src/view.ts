@@ -130,6 +130,7 @@ export class MobileExplorerView extends ItemView {
 		this.registerEvent(
 			this.app.vault.on("create", (file) => {
 				if (this.isPathInCurrentFolder(file.path)) this.debouncedRefresh();
+				else this.updateSubfolderCount(file.path);
 			})
 		);
 		this.registerEvent(
@@ -143,6 +144,7 @@ export class MobileExplorerView extends ItemView {
 				// Note: Obsidian nulls file.parent before firing "delete", so the
 				// parent must be derived from the path rather than file.parent.
 				if (this.isPathInCurrentFolder(file.path)) this.debouncedRefresh();
+				else this.updateSubfolderCount(file.path);
 			})
 		);
 		this.registerEvent(
@@ -160,15 +162,36 @@ export class MobileExplorerView extends ItemView {
 					this.isPathInCurrentFolder(oldPath)
 				) {
 					this.debouncedRefresh();
+				} else {
+					this.updateSubfolderCount(oldPath);
+					this.updateSubfolderCount(file.path);
 				}
 			})
 		);
 	}
 
-	private isPathInCurrentFolder(path: string): boolean {
+	private parentPathOf(path: string): string {
 		const lastSlash = path.lastIndexOf("/");
-		const parentPath = lastSlash === -1 ? "/" : path.substring(0, lastSlash);
-		return parentPath === this.currentFolder.path;
+		return lastSlash === -1 ? "/" : path.substring(0, lastSlash);
+	}
+
+	private isPathInCurrentFolder(path: string): boolean {
+		return this.parentPathOf(path) === this.currentFolder.path;
+	}
+
+	/**
+	 * Keep a subfolder row's item count current when something is added to
+	 * or removed from that subfolder (e.g. by sync). Changes directly in the
+	 * current folder are covered by the full refresh instead.
+	 */
+	private updateSubfolderCount(path: string) {
+		const folderPath = this.parentPathOf(path);
+		if (!this.isPathInCurrentFolder(folderPath)) return;
+		const el = this.itemEls.get(folderPath);
+		const folder = this.app.vault.getAbstractFileByPath(folderPath);
+		if (!el || !(folder instanceof TFolder)) return;
+		const countEl = el.querySelector(".mobile-explorer-item-count");
+		if (countEl) countEl.textContent = String(folder.children.length);
 	}
 
 	private isCurrentFolderAtOrUnder(path: string): boolean {
