@@ -1,4 +1,5 @@
 import {
+	DropdownComponent,
 	Notice,
 	Plugin,
 	PluginSettingTab,
@@ -81,7 +82,7 @@ export default class MobileExplorerPlugin extends Plugin {
 		this.addCommand({
 			id: "reveal-active-file",
 			name: "Reveal active file",
-			callback: () => this.revealActiveFile(),
+			callback: () => void this.revealActiveFile(),
 		});
 
 		this.addCommand({
@@ -111,20 +112,6 @@ export default class MobileExplorerPlugin extends Plugin {
 			})
 		);
 
-		// Keep the device-local home folder pointing at the right place when
-		// it (or one of its ancestors) is renamed or moved.
-		this.registerEvent(
-			this.app.vault.on("rename", (file, oldPath) => {
-				if (!(file instanceof TFolder)) return;
-				const home = this.getHomeFolderPath();
-				if (!isPathAtOrUnder(home, oldPath)) return;
-				this.setHomeFolderPath(
-					file.path + home.slice(oldPath.length),
-					false
-				);
-			})
-		);
-
 		// Creating or deleting the home folder (or an ancestor) switches the
 		// explorer between that folder and the vault root, so views need to
 		// redraw even though the stored path is unchanged.
@@ -133,10 +120,34 @@ export default class MobileExplorerPlugin extends Plugin {
 			if (!isPathAtOrUnder(this.getHomeFolderPath(), file.path)) return;
 			for (const view of this.getViews()) view.onHomeChanged(false);
 		};
-		this.registerEvent(this.app.vault.on("create", onHomeExistenceChanged));
 		this.registerEvent(this.app.vault.on("delete", onHomeExistenceChanged));
 
-		this.app.workspace.onLayoutReady(() => this.activateView());
+		// Keep the device-local home folder pointing at the right place when
+		// it (or one of its ancestors) is renamed or moved. A folder renamed
+		// onto the home path brings home into existence, like a create.
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (!(file instanceof TFolder)) return;
+				const home = this.getHomeFolderPath();
+				if (isPathAtOrUnder(home, oldPath)) {
+					this.setHomeFolderPath(
+						file.path + home.slice(oldPath.length),
+						false
+					);
+				} else {
+					onHomeExistenceChanged(file);
+				}
+			})
+		);
+
+		this.app.workspace.onLayoutReady(() => {
+			// "create" fires for every file during initial vault indexing;
+			// registering after layout is ready skips that flood.
+			this.registerEvent(
+				this.app.vault.on("create", onHomeExistenceChanged)
+			);
+			void this.activateView();
+		});
 	}
 
 	/**
@@ -219,14 +230,15 @@ export default class MobileExplorerPlugin extends Plugin {
 		}
 	}
 
-	private revealActiveFile() {
+	private async revealActiveFile() {
 		const file = this.app.workspace.getActiveFile();
 		if (!file?.parent) return;
-		const view = this.getViews()[0];
-		if (view) {
-			view.revealFile(file);
-			void this.app.workspace.revealLeaf(view.leaf);
-		}
+		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+		if (!leaf) return;
+		// A leaf in a background sidebar tab may still be a DeferredView.
+		await leaf.loadIfDeferred();
+		if (leaf.view instanceof MobileExplorerView) leaf.view.revealFile(file);
+		void this.app.workspace.revealLeaf(leaf);
 	}
 }
 
@@ -266,17 +278,13 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 					"have its own home folder."
 			)
 			.addDropdown((dropdown) => {
-				dropdown.addOption("", "Vault root");
-				const current = this.plugin.getHomeFolderPath();
-				if (current && !folders.includes(current)) {
-					dropdown.addOption(current, `${current} (missing)`);
-				}
-				for (const path of folders) {
-					dropdown.addOption(path, path);
-				}
-				dropdown.setValue(current).onChange((value) => {
-					this.plugin.setHomeFolderPath(value);
-				});
+				this.fillFolderDropdown(
+					dropdown,
+					folders,
+					"Vault root",
+					this.plugin.getHomeFolderPath()
+				);
+				dropdown.onChange((value) => this.plugin.setHomeFolderPath(value));
 			});
 
 		new Setting(containerEl)
@@ -290,6 +298,27 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 		}
 	}
 
+	/**
+	 * Fill a dropdown with a "none" sentinel followed by every vault folder,
+	 * and select `current`. A configured path that no longer exists is kept
+	 * as a "(missing)" option so the selection is visible rather than blank.
+	 */
+	private fillFolderDropdown(
+		dropdown: DropdownComponent,
+		folders: string[],
+		noneLabel: string,
+		current: string
+	) {
+		dropdown.addOption("", noneLabel);
+		if (current && !folders.includes(current)) {
+			dropdown.addOption(current, `${current} (missing)`);
+		}
+		for (const path of folders) {
+			dropdown.addOption(path, path);
+		}
+		dropdown.setValue(current);
+	}
+
 	private addShortcutSetting(
 		containerEl: HTMLElement,
 		index: number,
@@ -299,16 +328,11 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 		const setting = new Setting(containerEl)
 			.setName(`Shortcut ${index + 1}`)
 			.addDropdown((dropdown) => {
-				dropdown.addOption("", "None");
-				for (const path of folders) {
-					dropdown.addOption(path, path);
-				}
-				dropdown
-					.setValue(shortcut.folder)
-					.onChange(async (value) => {
-						this.updateShortcut(index, value, shortcut.icon);
-						await this.plugin.saveSettings();
-					});
+				this.fillFolderDropdown(dropdown, folders, "None", shortcut.folder);
+				dropdown.onChange(async (value) => {
+					this.updateShortcut(index, value, shortcut.icon);
+					await this.plugin.saveSettings();
+				});
 			});
 
 		if (shortcut.folder) {
