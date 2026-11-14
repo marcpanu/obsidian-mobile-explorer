@@ -1217,10 +1217,15 @@ export class MobileExplorerView extends ItemView {
 		input.value = originalName;
 		input.addClass("mobile-explorer-inline-rename");
 		// Clicks inside the input must not activate the row (which would
-		// navigate into a folder or open a note), and text selection by mouse
-		// must not start a row drag.
+		// navigate into a folder or open a note), text selection by mouse
+		// must not start a row drag, and a long-press or right-click in the
+		// input is for text editing, not the row's context menu.
 		input.addEventListener("click", (e) => e.stopPropagation());
 		input.addEventListener("dblclick", (e) => e.stopPropagation());
+		input.addEventListener("contextmenu", (e) => e.stopPropagation());
+		input.addEventListener("touchstart", (e) => e.stopPropagation(), {
+			passive: true,
+		});
 		const wasDraggable = el.draggable;
 		el.draggable = false;
 		nameEl.replaceWith(input);
