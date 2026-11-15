@@ -1,14 +1,16 @@
 import {
+	DropdownComponent,
 	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TAbstractFile,
 	TFile,
 	TFolder,
 	Vault,
 	setIcon,
 } from "obsidian";
-import { MobileExplorerView, VIEW_TYPE } from "./view";
+import { MobileExplorerView, VIEW_TYPE, isPathAtOrUnder } from "./view";
 import { printNote } from "./print";
 
 interface Shortcut {
@@ -23,6 +25,12 @@ interface MobileExplorerSettings {
 const DEFAULT_SETTINGS: MobileExplorerSettings = {
 	shortcuts: [],
 };
+
+// The home folder is stored per device (in localStorage, not data.json) so
+// each device can treat a different folder as the top of the explorer.
+// localStorage keys are only scoped per vault, not per plugin, so the key
+// carries the plugin id to stay clear of other plugins.
+const HOME_FOLDER_KEY = "mobile-explorer-home-folder";
 
 const SHORTCUT_ICONS = [
 	"folder-open",
@@ -54,6 +62,10 @@ const SHORTCUT_ICONS = [
 
 export default class MobileExplorerPlugin extends Plugin {
 	settings!: MobileExplorerSettings;
+	// Cached home folder path; null until first read. Views ask for home on
+	// every render and touch event, so this avoids a localStorage round trip
+	// each time.
+	private homePath: string | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -70,7 +82,7 @@ export default class MobileExplorerPlugin extends Plugin {
 		this.addCommand({
 			id: "reveal-active-file",
 			name: "Reveal active file",
-			callback: () => this.revealActiveFile(),
+			callback: () => void this.revealActiveFile(),
 		});
 
 		this.addCommand({
@@ -100,7 +112,77 @@ export default class MobileExplorerPlugin extends Plugin {
 			})
 		);
 
-		this.app.workspace.onLayoutReady(() => this.activateView());
+		// Creating or deleting the home folder (or an ancestor) switches the
+		// explorer between that folder and the vault root, so views need to
+		// redraw even though the stored path is unchanged.
+		const onHomeExistenceChanged = (file: TAbstractFile) => {
+			if (!(file instanceof TFolder)) return;
+			if (!isPathAtOrUnder(this.getHomeFolderPath(), file.path)) return;
+			for (const view of this.getViews()) view.onHomeChanged(false);
+		};
+		this.registerEvent(this.app.vault.on("delete", onHomeExistenceChanged));
+
+		// Keep the device-local home folder pointing at the right place when
+		// it (or one of its ancestors) is renamed or moved. A folder renamed
+		// onto the home path brings home into existence, like a create.
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				if (!(file instanceof TFolder)) return;
+				const home = this.getHomeFolderPath();
+				if (isPathAtOrUnder(home, oldPath)) {
+					this.setHomeFolderPath(
+						file.path + home.slice(oldPath.length),
+						false
+					);
+				} else {
+					onHomeExistenceChanged(file);
+				}
+			})
+		);
+
+		this.app.workspace.onLayoutReady(() => {
+			// "create" fires for every file during initial vault indexing;
+			// registering after layout is ready skips that flood.
+			this.registerEvent(
+				this.app.vault.on("create", onHomeExistenceChanged)
+			);
+			void this.activateView();
+		});
+	}
+
+	/**
+	 * The configured home folder path for this device, or "" when unset
+	 * (meaning the vault root).
+	 */
+	getHomeFolderPath(): string {
+		if (this.homePath === null) {
+			const value: unknown = this.app.loadLocalStorage(HOME_FOLDER_KEY);
+			this.homePath = typeof value === "string" ? value : "";
+		}
+		return this.homePath;
+	}
+
+	/**
+	 * Set the home folder for this device. Pass "" to use the vault root.
+	 */
+	setHomeFolderPath(path: string, navigate = true) {
+		this.homePath = path;
+		this.app.saveLocalStorage(HOME_FOLDER_KEY, path || null);
+		for (const view of this.getViews()) view.onHomeChanged(navigate);
+	}
+
+	/**
+	 * The folder the explorer treats as its top level. Falls back to the
+	 * vault root when nothing is configured or the configured folder no
+	 * longer exists.
+	 */
+	getHomeFolder(): TFolder {
+		const path = this.getHomeFolderPath();
+		if (path) {
+			const folder = this.app.vault.getAbstractFileByPath(path);
+			if (folder instanceof TFolder) return folder;
+		}
+		return this.app.vault.getRoot();
 	}
 
 	async loadSettings() {
@@ -124,9 +206,15 @@ export default class MobileExplorerPlugin extends Plugin {
 	}
 
 	private refreshViews() {
-		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-			(leaf.view as MobileExplorerView).onSettingsChanged();
-		}
+		for (const view of this.getViews()) view.onSettingsChanged();
+	}
+
+	/** Open explorer views, skipping leaves that are still deferred. */
+	private getViews(): MobileExplorerView[] {
+		return this.app.workspace
+			.getLeavesOfType(VIEW_TYPE)
+			.map((leaf) => leaf.view)
+			.filter((v): v is MobileExplorerView => v instanceof MobileExplorerView);
 	}
 
 	private async activateView() {
@@ -142,15 +230,15 @@ export default class MobileExplorerPlugin extends Plugin {
 		}
 	}
 
-	private revealActiveFile() {
+	private async revealActiveFile() {
 		const file = this.app.workspace.getActiveFile();
 		if (!file?.parent) return;
-		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
-		if (leaves.length > 0) {
-			const view = leaves[0].view as MobileExplorerView;
-			view.revealFile(file);
-			void this.app.workspace.revealLeaf(leaves[0]);
-		}
+		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+		if (!leaf) return;
+		// A leaf in a background sidebar tab may still be a DeferredView.
+		await leaf.loadIfDeferred();
+		if (leaf.view instanceof MobileExplorerView) leaf.view.revealFile(file);
+		void this.app.workspace.revealLeaf(leaf);
 	}
 }
 
@@ -181,6 +269,24 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 		const shortcuts = this.plugin.settings.shortcuts;
 
 		new Setting(containerEl)
+			.setName("Home folder")
+			.setDesc(
+				"The folder the explorer treats as its top level: where the " +
+					"Home button goes and where Recents appears. Recents and " +
+					"the back button are limited to this folder. Saved on this " +
+					"device only, so each device can have its own home folder."
+			)
+			.addDropdown((dropdown) => {
+				this.fillFolderDropdown(
+					dropdown,
+					folders,
+					"Vault root",
+					this.plugin.getHomeFolderPath()
+				);
+				dropdown.onChange((value) => this.plugin.setHomeFolderPath(value));
+			});
+
+		new Setting(containerEl)
 			.setName("Shortcut buttons")
 			.setDesc("Up to 3 folder shortcuts displayed in the header bar.")
 			.setHeading();
@@ -189,6 +295,27 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 			const shortcut = shortcuts[i] ?? { folder: "", icon: "folder-open" };
 			this.addShortcutSetting(containerEl, i, shortcut, folders);
 		}
+	}
+
+	/**
+	 * Fill a dropdown with a "none" sentinel followed by every vault folder,
+	 * and select `current`. A configured path that no longer exists is kept
+	 * as a "(missing)" option so the selection is visible rather than blank.
+	 */
+	private fillFolderDropdown(
+		dropdown: DropdownComponent,
+		folders: string[],
+		noneLabel: string,
+		current: string
+	) {
+		dropdown.addOption("", noneLabel);
+		if (current && !folders.includes(current)) {
+			dropdown.addOption(current, `${current} (missing)`);
+		}
+		for (const path of folders) {
+			dropdown.addOption(path, path);
+		}
+		dropdown.setValue(current);
 	}
 
 	private addShortcutSetting(
@@ -200,16 +327,11 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 		const setting = new Setting(containerEl)
 			.setName(`Shortcut ${index + 1}`)
 			.addDropdown((dropdown) => {
-				dropdown.addOption("", "None");
-				for (const path of folders) {
-					dropdown.addOption(path, path);
-				}
-				dropdown
-					.setValue(shortcut.folder)
-					.onChange(async (value) => {
-						this.updateShortcut(index, value, shortcut.icon);
-						await this.plugin.saveSettings();
-					});
+				this.fillFolderDropdown(dropdown, folders, "None", shortcut.folder);
+				dropdown.onChange(async (value) => {
+					this.updateShortcut(index, value, shortcut.icon);
+					await this.plugin.saveSettings();
+				});
 			});
 
 		if (shortcut.folder) {
