@@ -80,11 +80,14 @@ export class MobileExplorerView extends ItemView {
 	/**
 	 * The folder the back button / swipe-back leads to, or null when there
 	 * is nowhere to go up to. Navigation stops at the home folder (and at
-	 * the vault root for folders outside the home subtree).
+	 * the vault root for folders outside the home subtree), except that a
+	 * user who stepped down into home from its parent can step back out.
 	 */
 	private parentForNav(): TFolder | null {
-		if (this.isHome(this.currentFolder)) return null;
-		return this.currentFolder.parent;
+		const parent = this.currentFolder.parent;
+		if (!this.isHome(this.currentFolder)) return parent;
+		const cameFrom = this.navBackStack[this.navBackStack.length - 1];
+		return parent && parent.path === cameFrom ? parent : null;
 	}
 
 	/** Display name for a folder: the vault name for the root. */

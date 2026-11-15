@@ -271,11 +271,10 @@ class MobileExplorerSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Home folder")
 			.setDesc(
-				"The folder the explorer treats as its top level: where it " +
-					"opens, where the Home button goes, and where Recents " +
-					"appears. Recents and the back button are limited to this " +
-					"folder. Saved on this device only, so each device can " +
-					"have its own home folder."
+				"The folder the explorer treats as its top level: where the " +
+					"Home button goes and where Recents appears. Recents and " +
+					"the back button are limited to this folder. Saved on this " +
+					"device only, so each device can have its own home folder."
 			)
 			.addDropdown((dropdown) => {
 				this.fillFolderDropdown(
